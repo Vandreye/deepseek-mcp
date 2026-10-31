@@ -42,12 +42,12 @@ Done in the server:
 - Report: the summary is cut at whole items, keeps the trailing "Not done" part, and findings types get twice the room. The command log is trimmed first.
 - Command log: each failed command shows one error line instead of an 8-line tail.
 - Default model per type: `/route review pro`, stored in `models.json` (user, or per project).
-- Partial reads: `read_file` returns 400 lines by default and says how long the file is; the prompt says grep first, then read ranges.
+- Partial reads: `read_file` returns 200 lines by default and says how long the file is; the prompt says grep first, then read ranges.
 - Budget planning: review/research/debug/plan prompts state the step and token budget and ask for a plan per area up front. DeepSeek gets one warning when 20% of steps or 80% of tokens are left.
 - Limit shown: the report header says which limit stopped it, with numbers (for example `stopped at token limit (3.10M/3.00M input tokens, step 32/150)`).
 
 - Cached tokens: the token budget counts cached input at 10% (`DEEPSEEK_CACHE_WEIGHT`). The token-limit header also shows the raw tokens sent.
-- History compaction: once a prompt passes 60k tokens (`DEEPSEEK_COMPACT_TOKENS`), tool outputs older than the newest 8 are shortened to one line. The prompt tells DeepSeek to note file:line facts in its own messages. The report header shows "history shortened N×".
+- History compaction: once a prompt passes 200k tokens (`DEEPSEEK_COMPACT_TOKENS`), tool outputs older than the newest 8 are shortened to one line. The prompt tells DeepSeek to note file:line facts in its own messages. The report header shows "history shortened N×".
 - Per-call budget: `deepseek_task` takes `max_tokens`.
 - Built-in fan-out: `deepseek_task` takes `areas: [...]`. It runs one sub-task per area (3 at a time, `DEEPSEEK_FANOUT_CONCURRENCY`), each with its own budget, and returns one merged report with each area's task_id.
 

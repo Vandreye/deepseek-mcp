@@ -285,6 +285,11 @@ server.registerTool(
     }
     const out: string[] = [];
     for (const item of items) {
+      // Another approve/reject may have taken it while the prompt was open; claim it right before running.
+      if (!approvals.get(item!.id)) {
+        out.push(`${item!.id}: skipped, already handled.`);
+        continue;
+      }
       approvals.remove(item!.id);
       const task = tasks.get(item!.taskId);
       if (task) trackDeletes(task, item!);

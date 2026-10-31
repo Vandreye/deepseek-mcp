@@ -196,7 +196,7 @@ export function reportSection(task: TaskRecord, section: ReportSection, filePath
       for (const m of task.messages) {
         for (const tc of m.tool_calls ?? []) lines.push(`${tc.function.name} ${tc.function.arguments.slice(0, 160)}`);
       }
-      return lines.length ? lines.join("\n") : "No tool calls.";
+      return lines.length ? truncate(lines.join("\n"), 20_000) : "No tool calls.";
     }
   }
 }

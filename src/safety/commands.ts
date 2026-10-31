@@ -119,5 +119,5 @@ export function toCommandString(argv: string[]): string {
 }
 
 export function describeAllowlist(): string {
-  return "tests/builds/linters (npm test, npm run build|lint|typecheck|test:*, npx tsc|vitest|jest|eslint, pytest, cargo/go/dotnet build|test), read-only git (status, diff, log, show, blame, ls-files)";
+  return "tests/builds/linters (npm test, npm run build|lint|typecheck|test:*, npx tsc|vitest|jest|eslint, pytest, cargo/go/dotnet build|test), read-only git (status, diff, log, show, blame, ls-files, rev-parse, branch --list)";
 }

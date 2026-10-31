@@ -95,11 +95,21 @@ export async function continueTask(task: TaskRecord, message: string, deps: Agen
   task.messages.push({ role: "user", content: prefix + message.trim() + budget });
   task.status = "running";
   task.error = undefined;
+  task.finalText = ""; // a failed follow-up must not show the previous run's report
   await runLoop(task, deps, steps, tokens);
   return task;
 }
 
 const PARALLEL_TOOLS = new Set(["read_file", "list_dir", "glob", "grep"]);
+
+function isJson(s: string): boolean {
+  try {
+    JSON.parse(s || "{}");
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 /** DeepSeek's raw tool-call markup (uses fullwidth bars), up to its closing tag or the end. */
 const DSML_CALLS = /<[｜|]+DSML[｜|]+tool_calls>[\s\S]*?(?:<\/[｜|]+DSML[｜|]+tool_calls>|$)/g;
@@ -170,7 +180,7 @@ async function runLoop(task: TaskRecord, deps: AgentDeps, maxSteps: number, maxT
       // Cut off by the small step cap (thinking eats into it), either mid-report or mid-tool-call:
       // drop the reply and redo the step with the report cap. Tools stay on, so a step that wanted
       // more tools still gets them instead of writing the calls out as text. Same prefix, mostly cached.
-      if (!r.message.tool_calls?.length && r.finishReason === "length") {
+      if (r.finishReason === "length" && (!r.message.tool_calls?.length || r.message.tool_calls.some((c) => !isJson(c.function.arguments)))) {
         log({ event: "step_cut", maxTokens: config.maxToolStepTokens });
         r = await callModel(config.maxFinalTokens);
         task.usage.add(r.usage, model);

@@ -74,7 +74,7 @@ You can also just say it: "have DeepSeek review this" or "do this one yourself".
 
 The default is `deepseek-flash`. Claude can pick `pro` (`deepseek-v4-pro`) for hard tasks. To always use `pro` for a task type, set it once with `/route review pro`; it is stored in `~/.deepseek-mcp/models.json` (or `<project>/.deepseek-mcp/models.json`), for example `{ "review": "pro", "default": "flash" }`. Every report ends with DeepSeek's token use and a cost estimate at peak prices; off-peak is half.
 
-Long runs stay cheap: cached input (the re-sent history) counts at 10% toward the token budget, and once a prompt passes about 60k tokens, old tool outputs are shortened to one-line summaries.
+Long runs stay cheap: cached input (the re-sent history) counts at 10% toward the token budget, and once a prompt passes about 200k tokens, old tool outputs are shortened to one-line summaries.
 
 ## Safety
 

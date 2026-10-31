@@ -213,3 +213,20 @@ describe("report cut off by the tool-step cap", () => {
     expect(t2.finalText).toBe("Findings: none.");
   });
 });
+
+describe("tool call cut off by the step cap", () => {
+  it("redoes the step instead of running a half-written call", async () => {
+    const broken: ChatMessage = { role: "assistant", content: "", tool_calls: [{ id: "b", type: "function", function: { name: "read_file", arguments: '{"path": "src/a' } }] };
+    const replies: ChatMessage[] = [broken, listCall("ok"), { role: "assistant", content: "report" }];
+    const finishes = ["length", "tool_calls", "stop"];
+    const requests: ChatRequest[] = [];
+    const chat: ChatFn = async (req) => {
+      requests.push(structuredClone(req));
+      return { message: replies.shift()!, usage: { prompt_tokens: 1000, completion_tokens: 10 }, finishReason: finishes.shift()! };
+    };
+    const task = await startTask(input(), deps(chat, { ...testConfig(), compactTokens: 1e9 }));
+    expect(requests[1].max_tokens).toBe(16000);
+    expect(task.messages.some((m) => m.role === "tool" && m.tool_call_id === "b")).toBe(false);
+    expect(task.finalText).toBe("report");
+  });
+});
