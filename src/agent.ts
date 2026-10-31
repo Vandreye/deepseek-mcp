@@ -1,6 +1,6 @@
 import type { ApprovalStore, AskUser } from "./approvals.js";
 import { reasoningEffortFor, stepsFor, thinkingFor, type Config, type ModelKey } from "./config.js";
-import type { ChatFn } from "./deepseek.js";
+import type { ChatFn, ChatMessage } from "./deepseek.js";
 import { compactHistory } from "./compact.js";
 import { auditLogger, ensureWorkspaceDir } from "./log.js";
 import { systemPrompt, userPrompt } from "./prompts.js";
@@ -62,7 +62,7 @@ export async function startTask(input: NewTask, deps: AgentDeps): Promise<TaskRe
  */
 export async function startFanOut(input: NewTask, areas: string[], deps: AgentDeps): Promise<TaskRecord[]> {
   const out: TaskRecord[] = new Array(areas.length);
-  const maxTokens = input.maxTokens && Math.max(50_000, Math.floor(input.maxTokens / areas.length));
+  const maxTokens = input.maxTokens && Math.max(1, Math.floor(input.maxTokens / areas.length));
   let next = 0;
   const worker = async () => {
     while (next < areas.length) {
@@ -100,6 +100,14 @@ export async function continueTask(task: TaskRecord, message: string, deps: Agen
 }
 
 const PARALLEL_TOOLS = new Set(["read_file", "list_dir", "glob", "grep"]);
+
+/** The reply text, flagged when it still ran into the output cap. */
+function withCutNote(r: { message: ChatMessage; finishReason: string }): string {
+  const text = (r.message.content ?? "").trim();
+  return r.finishReason === "length"
+    ? `${text}\n\n[Report cut off at the output limit; raise DEEPSEEK_MAX_FINAL_TOKENS or lower /ds-effort.]`
+    : text;
+}
 
 async function sequential<T>(jobs: (() => Promise<T>)[]): Promise<T[]> {
   const out: T[] = [];
@@ -150,16 +158,32 @@ async function runLoop(task: TaskRecord, deps: AgentDeps, maxSteps: number, maxT
       );
       task.usage.add(r.usage, model);
       task.steps++;
-      task.messages.push(r.message);
       used();
 
       const calls = r.message.tool_calls ?? [];
       if (calls.length === 0) {
-        task.finalText = (r.message.content ?? "").trim();
+        let final = r;
+        // The report hit the small tool-step cap (thinking eats into it): drop the cut-off reply
+        // and ask again with the report cap. Same prefix, so the retry is mostly cached.
+        if (r.finishReason === "length") {
+          log({ event: "report_cut", maxTokens: config.maxToolStepTokens });
+          final = await chat(
+            {
+              model: model.id, messages: task.messages, tools, tool_choice: "none",
+              max_tokens: config.maxFinalTokens, thinking, reasoning_effort: reasoningEffort,
+            },
+            deps.signal,
+          );
+          task.usage.add(final.usage, model);
+          used();
+        }
+        task.messages.push(final.message);
+        task.finalText = withCutNote(final);
         task.status = "done";
         log({ event: "done", steps: task.steps, cost: task.usage.cost });
         return;
       }
+      task.messages.push(r.message);
       // Reads have no side effects, so a step made only of reads runs them at the same time.
       const run1 = (c: (typeof calls)[number]) => executeTool(ctx, c.function.name, c.function.arguments);
       const results = calls.every((c) => PARALLEL_TOOLS.has(c.function.name))
@@ -205,7 +229,7 @@ async function runLoop(task: TaskRecord, deps: AgentDeps, maxSteps: number, maxT
     task.usage.add(r.usage, model);
     task.messages.push(r.message);
     used();
-    task.finalText = (r.message.content ?? "").trim();
+    task.finalText = withCutNote(r);
     log({ event: task.status, steps: task.steps, cost: task.usage.cost });
   } catch (e) {
     task.status = "error";

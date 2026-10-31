@@ -29,7 +29,10 @@ export function runShell(command: string, cwd: string, timeoutMs: number): Promi
   command = fixWindowsProgram(command);
   return new Promise((resolve) => {
     const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => !HIDDEN_ENV.test(k)));
-    const child = spawn(command, { cwd, shell: true, windowsHide: true, env, stdio: ["ignore", "pipe", "pipe"] });
+    // On Unix the shell gets its own process group, so a timeout can kill its children too.
+    const child = spawn(command, {
+      cwd, shell: true, windowsHide: true, env, stdio: ["ignore", "pipe", "pipe"], detached: process.platform !== "win32",
+    });
     let output = "";
     let timedOut = false;
     const onData = (d: Buffer) => {
@@ -59,9 +62,13 @@ function killTree(pid: number | undefined): void {
     execFile("taskkill", ["/pid", String(pid), "/T", "/F"], () => {});
   } else {
     try {
-      process.kill(pid, "SIGKILL");
+      process.kill(-pid, "SIGKILL"); // the whole group
     } catch {
-      /* already exited */
+      try {
+        process.kill(pid, "SIGKILL");
+      } catch {
+        /* already exited */
+      }
     }
   }
 }

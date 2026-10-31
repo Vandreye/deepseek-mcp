@@ -170,7 +170,7 @@ export function reportSection(task: TaskRecord, section: ReportSection, filePath
       return ch.length ? ch.map((c) => `${c.kind} ${c.rel} +${c.added}/-${c.removed}`).join("\n") : "No file changes.";
     }
     case "diff": {
-      if (filePath) return fileDiff(task, filePath.replace(/\\/g, "/").replace(/^\.\//, ""));
+      if (filePath) return truncate(fileDiff(task, filePath.replace(/\\/g, "/").replace(/^\.\//, "")), 30_000);
       const all = fileChanges(task).map((c) => fileDiff(task, c.rel)).join("\n");
       return truncate(all || "No file changes.", 30_000) + (all.length > 30_000 ? "\n(Ask for one file with path=… to see the rest.)" : "");
     }

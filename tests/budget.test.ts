@@ -160,3 +160,30 @@ describe("brief report", () => {
     expect(compactReport(task, new ApprovalStore(), 3200, "brief")).not.toContain("deepseek_get_report");
   });
 });
+
+describe("report cut off by the tool-step cap", () => {
+  function cutting(finishes: string[]): { chat: ChatFn; requests: ChatRequest[] } {
+    const requests: ChatRequest[] = [];
+    const replies: ChatMessage[] = [listCall(), { role: "assistant", content: "half a rep" }, { role: "assistant", content: "full report" }];
+    const chat: ChatFn = async (req) => {
+      requests.push(structuredClone(req));
+      return { message: replies.shift()!, usage: { prompt_tokens: 1000, completion_tokens: 10 }, finishReason: finishes.shift() ?? "stop" };
+    };
+    return { chat, requests };
+  }
+
+  it("asks again with the report cap and keeps only the whole reply", async () => {
+    const { chat, requests } = cutting(["tool_calls", "length", "stop"]);
+    const task = await startTask(input(), deps(chat, { ...testConfig(), compactTokens: 1e9 }));
+    expect(task.status).toBe("done");
+    expect(task.finalText).toBe("full report");
+    expect(requests[2]).toMatchObject({ tool_choice: "none", max_tokens: 16000 });
+    expect(task.messages.some((m) => m.content === "half a rep")).toBe(false);
+  });
+
+  it("flags a report that is still cut off", async () => {
+    const { chat } = cutting(["tool_calls", "length", "length"]);
+    const task = await startTask(input(), deps(chat, { ...testConfig(), compactTokens: 1e9 }));
+    expect(task.finalText).toMatch(/^full report\n\n\[Report cut off/);
+  });
+});

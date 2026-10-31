@@ -99,7 +99,10 @@ export function classifyCommand(argv: string[], extraAllow: string[][] = []): "a
 
 /** Rebuild a safe command string from parsed words, quoting where needed. */
 export function toCommandString(argv: string[]): string {
-  return argv.map((a) => (a === "" || /[\s"']/.test(a) ? `"${a.replace(/"/g, "")}"` : a)).join(" ");
+  // $ and ` are refused by parseCommand, so \" is a plain quote for both sh and Windows programs.
+  // Backslashes before a quote (or the closing quote) are doubled so they stay literal.
+  const quote = (a: string) => `"${a.replace(/(\\*)"/g, '$1$1\\"').replace(/(\\+)$/, "$1$1")}"`;
+  return argv.map((a) => (a === "" || /[\s"']/.test(a) ? quote(a) : a)).join(" ");
 }
 
 export function describeAllowlist(): string {

@@ -185,7 +185,8 @@ server.registerTool(
       );
       const usage = new UsageTotals();
       usage.add(r.usage, config.models[key]);
-      return text(`${truncate(r.message.content ?? "", config.maxReplyChars * 2)}\n\n(DeepSeek ${key}: ${usage.summary()})`);
+      const cut = r.finishReason === "length" ? "\n\n[Answer cut off at the output limit.]" : "";
+      return text(`${truncate(r.message.content ?? "", config.maxReplyChars * 2)}${cut}\n\n(DeepSeek ${key}: ${usage.summary()})`);
     } catch (e) {
       return text(`deepseek_ask failed: ${(e as Error).message}`, true);
     }
@@ -268,6 +269,9 @@ server.registerTool(
     if (ask) {
       const ok = await ask(`Approve these DeepSeek actions?\n${items.map((i) => describeAction(i!)).join("\n")}`).catch(() => false);
       if (!ok) return text("The user did not approve. Nothing was done.");
+    } else if (config.elicitation !== "off") {
+      // The client can't show a confirmation prompt; only act on Claude's word if the user opted in.
+      return text("This client can't ask the user to confirm, so nothing was done. To approve through Claude instead, set DEEPSEEK_ELICITATION=off and restart the server.", true);
     }
     const out: string[] = [];
     for (const item of items) {

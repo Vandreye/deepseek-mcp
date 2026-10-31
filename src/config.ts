@@ -38,6 +38,8 @@ const DEFAULT_THINKING: Record<TaskType, Thinking> = {
 };
 
 const DEFAULT_REASONING_EFFORT = "low";
+/** reasoning_effort values the API takes; other env values are ignored. */
+const API_EFFORTS = ["low", "medium", "high", "max"];
 
 export interface Config {
   apiKey: string;
@@ -95,9 +97,9 @@ function thinkingDefaults(): Record<TaskType, Thinking> {
 /** Per-type reasoning effort: env DEEPSEEK_REASONING_EFFORT_<TYPE> wins, then DEEPSEEK_REASONING_EFFORT. */
 function effortDefaults(): Record<TaskType, string> {
   const out = {} as Record<TaskType, string>;
-  const global = process.env.DEEPSEEK_REASONING_EFFORT;
+  const global = envChoice("DEEPSEEK_REASONING_EFFORT", API_EFFORTS);
   for (const t of Object.keys(DEFAULT_THINKING) as TaskType[]) {
-    out[t] = process.env[`DEEPSEEK_REASONING_EFFORT_${t.toUpperCase()}`] || global || DEFAULT_REASONING_EFFORT;
+    out[t] = envChoice(`DEEPSEEK_REASONING_EFFORT_${t.toUpperCase()}`, API_EFFORTS) || global || DEFAULT_REASONING_EFFORT;
   }
   return out;
 }

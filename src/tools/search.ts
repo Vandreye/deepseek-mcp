@@ -25,6 +25,8 @@ export async function globFiles(task: TaskRecord, pattern: string, max = 500): P
   return shown.join("\n") + (visible.length > max ? `\n…[${visible.length - max} more]` : "");
 }
 
+const MAX_TEST_CHARS = 10_000;
+
 export interface GrepArgs {
   pattern: string;
   glob?: string;
@@ -58,7 +60,8 @@ export async function grep(task: TaskRecord, a: GrepArgs): Promise<string> {
     if (buf.subarray(0, 8000).includes(0)) continue;
     const lines = buf.toString("utf8").split(/\r?\n/);
     for (let i = 0; i < lines.length; i++) {
-      if (!re.test(lines[i])) continue;
+      // A bad pattern on a huge line (minified files) can run for minutes; test only its start.
+      if (!re.test(lines[i].length > MAX_TEST_CHARS ? lines[i].slice(0, MAX_TEST_CHARS) : lines[i])) continue;
       if (a.files_only) {
         out.push(rel);
         break;

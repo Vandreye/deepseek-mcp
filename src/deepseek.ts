@@ -99,7 +99,7 @@ export function createDeepSeekChat(cfg: Config): ChatFn {
           const err = new DeepSeekError(`DeepSeek API ${res.status}: ${text.slice(0, 500)}`, res.status);
           if (RETRYABLE.has(res.status)) {
             lastErr = err;
-            retryAfterMs = (Number(res.headers.get("retry-after")) || 0) * 1000;
+            retryAfterMs = retryAfter(res.headers.get("retry-after"));
             continue;
           }
           throw err;
@@ -175,4 +175,13 @@ export class UsageTotals {
 
 function k(n: number): string {
   return n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n);
+}
+
+/** Retry-After in ms: either seconds or an HTTP date. */
+export function retryAfter(h: string | null, now = Date.now()): number {
+  if (!h) return 0;
+  const secs = Number(h);
+  if (Number.isFinite(secs)) return Math.max(0, secs * 1000);
+  const at = Date.parse(h);
+  return Number.isFinite(at) ? Math.max(0, at - now) : 0;
 }
