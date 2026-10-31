@@ -19,6 +19,8 @@
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "setup": "node scripts/install.mjs",
     "check:live": "npm run build && node scripts/live-check.mjs",
+    "bench": "node bench/run.mjs",
+    "bench:compare": "node bench/compare.mjs",
     "inspect": "npx @modelcontextprotocol/inspector node dist/index.js"
   },
   "engines": {

@@ -6,3 +6,5 @@ dist/
 .deepseek-mcp/
 *.log
 coverage/
+
+bench/.versions/
