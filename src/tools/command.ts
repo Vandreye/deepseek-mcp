@@ -25,7 +25,7 @@ export function fixWindowsProgram(command: string, platform: NodeJS.Platform = p
 }
 
 /** Run a command line in `cwd` through the system shell, capturing stdout+stderr. */
-export function runShell(command: string, cwd: string, timeoutMs: number): Promise<ShellResult> {
+export function runShell(command: string, cwd: string, timeoutMs: number, signal?: AbortSignal): Promise<ShellResult> {
   command = fixWindowsProgram(command);
   return new Promise((resolve) => {
     const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => !HIDDEN_ENV.test(k)));
@@ -45,12 +45,17 @@ export function runShell(command: string, cwd: string, timeoutMs: number): Promi
       timedOut = true;
       killTree(child.pid);
     }, timeoutMs);
+    // Cancelling the task stops the command too.
+    const onAbort = () => killTree(child.pid);
+    signal?.addEventListener("abort", onAbort, { once: true });
     child.on("error", (e) => {
       clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
       resolve({ exitCode: null, output: output + `\n${e.message}`, timedOut });
     });
     child.on("close", (code) => {
       clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
       resolve({ exitCode: code, output, timedOut });
     });
   });

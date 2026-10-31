@@ -102,7 +102,7 @@ export function classifyCommand(argv: string[], extraAllow: string[][] = []): "a
   }
   // Allowed tools that rewrite or delete files with a flag (eslint --fix, prettier --write, vitest -u, …).
   if (argv.slice(1).some(writesFiles)) return "approve";
-  if (["eslint", "npx"].includes(norm(argv[0])) && argv.some((a) => a === "-o" || a.startsWith("--output-file"))) return "approve";
+  if (["eslint", "npx"].includes(norm(argv[0])) && argv.some((a) => a.startsWith("-o") || a.startsWith("--output-file"))) return "approve";
   if (ALLOW.some((p) => matches(argv, p))) return "allow";
   if (extraAllow.some((p) => matches(argv, p))) return "allow";
   return "approve";

@@ -17,7 +17,7 @@ export interface ChatMessage {
 
 export interface ToolDef {
   type: "function";
-  function: { name: string; description: string; parameters: Record<string, unknown> };
+  function: { name: string; description: string; parameters: Record<string, unknown>; strict?: boolean };
 }
 
 export interface Usage {
@@ -25,6 +25,7 @@ export interface Usage {
   completion_tokens: number;
   prompt_cache_hit_tokens?: number;
   prompt_cache_miss_tokens?: number;
+  completion_tokens_details?: { reasoning_tokens?: number };
 }
 
 export interface ChatRequest {
@@ -73,7 +74,7 @@ export function createDeepSeekChat(cfg: Config): ChatFn {
     // DeepSeek has low, high and max; it treats medium as high, so send that directly.
     if (thinking === "enabled") body.reasoning_effort = req.reasoning_effort === "medium" ? "high" : (req.reasoning_effort ?? "low");
     if (req.tools?.length) {
-      body.tools = req.tools;
+      body.tools = cfg.strictTools ? req.tools.map(strictTool) : req.tools;
       body.tool_choice = req.tool_choice ?? "auto";
     }
     if (req.max_tokens) body.max_tokens = req.max_tokens;
@@ -90,7 +91,9 @@ export function createDeepSeekChat(cfg: Config): ChatFn {
       }
       try {
         const timeout = AbortSignal.timeout(15 * 60_000);
-        const res = await fetch(`${cfg.baseUrl}/chat/completions`, {
+        // Strict tool schemas are a beta feature, served only from the /beta base URL.
+        const base = cfg.strictTools && req.tools?.length ? `${cfg.baseUrl}/beta` : cfg.baseUrl;
+        const res = await fetch(`${base}/chat/completions`, {
           method: "POST",
           headers: { "Content-Type": "application/json", Authorization: `Bearer ${cfg.apiKey}` },
           body: JSON.stringify(body),
@@ -123,6 +126,8 @@ export function createDeepSeekChat(cfg: Config): ChatFn {
       } catch (e) {
         if (signal?.aborted) throw e;
         if (e instanceof DeepSeekError) throw e;
+        // Our own 15-minute limit: retrying a call that hung would only hang again.
+        if ((e as Error)?.name === "TimeoutError") throw new DeepSeekError("DeepSeek did not answer within 15 minutes.");
         lastErr = e; // network error: retry
       }
     }
@@ -140,21 +145,45 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
   });
 }
 
+/** Search & Fetch API: USD per successful call ($0.75 per 1,000). */
+export const WEB_CALL_PRICE = 0.00075;
+
+/**
+ * DeepSeek's peak hours: 01:00-04:00 and 06:00-10:00 UTC, Monday to Friday. Other hours cost half.
+ * Chinese public holidays are also off-peak; they are not tracked, so costs stay an upper bound.
+ */
+export function isPeak(at: Date): boolean {
+  const day = at.getUTCDay();
+  const h = at.getUTCHours();
+  return day >= 1 && day <= 5 && ((h >= 1 && h < 4) || (h >= 6 && h < 10));
+}
+
 export class UsageTotals {
   cacheHit = 0;
   cacheMiss = 0;
   output = 0;
+  /** Output tokens spent on thinking (part of output). */
+  reasoning = 0;
   calls = 0;
+  webCalls = 0;
   cost = 0;
 
-  add(u: Usage, model: ModelInfo): void {
+  add(u: Usage, model: ModelInfo, at = new Date()): void {
     const hit = u.prompt_cache_hit_tokens ?? 0;
     const miss = u.prompt_cache_miss_tokens ?? Math.max(0, u.prompt_tokens - hit);
     this.cacheHit += hit;
     this.cacheMiss += miss;
     this.output += u.completion_tokens;
+    this.reasoning += u.completion_tokens_details?.reasoning_tokens ?? 0;
     this.calls++;
-    this.cost += (hit * model.price.cacheHit + miss * model.price.cacheMiss + u.completion_tokens * model.price.output) / 1e6;
+    const rate = isPeak(at) ? 1 : 0.5;
+    this.cost += (rate * (hit * model.price.cacheHit + miss * model.price.cacheMiss + u.completion_tokens * model.price.output)) / 1e6;
+  }
+
+  /** One billed web_search / web_fetch call. */
+  addWeb(): void {
+    this.webCalls++;
+    this.cost += WEB_CALL_PRICE;
   }
 
   /** Add another task's totals (for merged reports). */
@@ -162,7 +191,9 @@ export class UsageTotals {
     this.cacheHit += o.cacheHit;
     this.cacheMiss += o.cacheMiss;
     this.output += o.output;
+    this.reasoning += o.reasoning;
     this.calls += o.calls;
+    this.webCalls += o.webCalls;
     this.cost += o.cost;
   }
 
@@ -171,7 +202,9 @@ export class UsageTotals {
   }
 
   summary(): string {
-    return `${k(this.input)} in (${k(this.cacheHit)} cached) / ${k(this.output)} out, ${this.calls} calls, ≤$${this.cost.toFixed(4)}`;
+    const thinking = this.reasoning ? ` (${k(this.reasoning)} thinking)` : "";
+    const web = this.webCalls ? `, ${this.webCalls} web` : "";
+    return `${k(this.input)} in (${k(this.cacheHit)} cached) / ${k(this.output)} out${thinking}, ${this.calls} calls${web}, ≤$${this.cost.toFixed(4)}`;
   }
 }
 
@@ -186,4 +219,31 @@ export function retryAfter(h: string | null, now = Date.now()): number {
   if (Number.isFinite(secs)) return Math.max(0, secs * 1000);
   const at = Date.parse(h);
   return Number.isFinite(at) ? Math.max(0, at - now) : 0;
+}
+
+/**
+ * Strict mode (beta): DeepSeek then always returns arguments that match the schema.
+ * It needs every property listed as required and additionalProperties false, so optional
+ * properties become "this type or null"; the tool code already treats null as "not given".
+ */
+export function strictTool(t: ToolDef): ToolDef {
+  return { ...t, function: { ...t.function, strict: true, parameters: strictSchema(t.function.parameters) } };
+}
+
+function strictSchema(schema: Record<string, any>): Record<string, any> {
+  if (schema.type === "array" && schema.items) return { ...schema, items: strictSchema(schema.items) };
+  if (schema.type !== "object") return schema;
+  const props: Record<string, any> = schema.properties ?? {};
+  const required = new Set<string>(schema.required ?? []);
+  const out: Record<string, any> = {};
+  for (const [name, p] of Object.entries(props)) {
+    const inner = strictSchema(p);
+    if (required.has(name)) {
+      out[name] = inner;
+    } else {
+      const { description, ...rest } = inner;
+      out[name] = { anyOf: [rest, { type: "null" }], ...(description ? { description } : {}) };
+    }
+  }
+  return { ...schema, properties: out, required: Object.keys(props), additionalProperties: false };
 }

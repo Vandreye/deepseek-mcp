@@ -26,6 +26,8 @@ export interface NewTask {
   model: ModelKey;
   workspace: string;
   readOnly: boolean;
+  /** Offer web_search / web_fetch (read-only tasks only). */
+  web?: boolean;
   files?: string[];
   contextGlobs?: string[];
   maxSteps?: number;
@@ -36,6 +38,7 @@ export interface NewTask {
 export async function startTask(input: NewTask, deps: AgentDeps): Promise<TaskRecord> {
   const task = deps.tasks.create({
     type: input.type, model: input.model, workspace: input.workspace, readOnly: input.readOnly,
+    web: !!input.web && input.readOnly && deps.config.webEnabled,
   });
   ensureWorkspaceDir(input.workspace);
   const maxSteps = input.maxSteps ?? stepsFor(deps.config, input.type);
@@ -47,6 +50,7 @@ export async function startTask(input: NewTask, deps: AgentDeps): Promise<TaskRe
         maxSteps,
         maxTokens,
         cacheWeight: deps.config.cacheWeight,
+        web: task.web,
       }),
     },
     { role: "user", content: userPrompt(input.task, input.files, input.contextGlobs) },
@@ -114,16 +118,23 @@ function isJson(s: string): boolean {
 /** DeepSeek's raw tool-call markup (uses fullwidth bars), up to its closing tag or the end. */
 const DSML_CALLS = /<[｜|]+DSML[｜|]+tool_calls>[\s\S]*?(?:<\/[｜|]+DSML[｜|]+tool_calls>|$)/g;
 
-/** The reply text, flagged when it still ran into the output cap. */
+/** Notes for replies that did not end normally (finish_reason values from DeepSeek's API docs). */
+const FINISH_NOTES: Record<string, string> = {
+  length: "[Report cut off at the output limit; raise DEEPSEEK_MAX_FINAL_TOKENS or lower /ds-effort.]",
+  content_filter: "[DeepSeek's content filter stopped this reply.]",
+  insufficient_system_resource: "[DeepSeek ran out of server capacity mid-reply. Follow up with task_id to retry.]",
+  aborted: "[DeepSeek aborted this reply. Follow up with task_id to retry.]",
+};
+
+/** The reply text, flagged when it did not end normally. */
 function withCutNote(r: { message: ChatMessage; finishReason: string }): string {
   // With tools off, DeepSeek sometimes writes tool calls as raw markup; that is not report text.
   const text = (r.message.content ?? "").replace(DSML_CALLS, "").trim();
   if (!text && (r.message.content ?? "").includes("DSML")) {
     return "[DeepSeek stopped while still wanting to use tools and wrote no report. Follow up with task_id to get one.]";
   }
-  return r.finishReason === "length"
-    ? `${text}\n\n[Report cut off at the output limit; raise DEEPSEEK_MAX_FINAL_TOKENS or lower /ds-effort.]`
-    : text;
+  const note = FINISH_NOTES[r.finishReason];
+  return note ? `${text}\n\n${note}`.trim() : text;
 }
 
 async function sequential<T>(jobs: (() => Promise<T>)[]): Promise<T[]> {
@@ -135,9 +146,9 @@ async function sequential<T>(jobs: (() => Promise<T>)[]): Promise<T[]> {
 async function runLoop(task: TaskRecord, deps: AgentDeps, maxSteps: number, maxTokens: number): Promise<void> {
   const { chat, config } = deps;
   const model = config.models[task.model];
-  const tools = toolDefs(task.readOnly);
+  const tools = toolDefs(task.readOnly, task.web);
   const log = auditLogger(task.workspace, task.id);
-  const ctx = { task, config, approvals: deps.approvals, askUser: deps.askUser, log };
+  const ctx = { task, config, approvals: deps.approvals, askUser: deps.askUser, log, signal: deps.signal };
   const hitAtStart = task.usage.cacheHit;
   const missAtStart = task.usage.cacheMiss;
   const stepsAtStart = task.steps;
@@ -180,8 +191,10 @@ async function runLoop(task: TaskRecord, deps: AgentDeps, maxSteps: number, maxT
       // Cut off by the small step cap (thinking eats into it), either mid-report or mid-tool-call:
       // drop the reply and redo the step with the report cap. Tools stay on, so a step that wanted
       // more tools still gets them instead of writing the calls out as text. Same prefix, mostly cached.
-      if (r.finishReason === "length" && (!r.message.tool_calls?.length || r.message.tool_calls.some((c) => !isJson(c.function.arguments)))) {
-        log({ event: "step_cut", maxTokens: config.maxToolStepTokens });
+      // DeepSeek can also stop a reply when it runs short of server capacity; that is worth one redo too.
+      const unfinished = !r.message.tool_calls?.length || r.message.tool_calls.some((c) => !isJson(c.function.arguments));
+      if (unfinished && (r.finishReason === "length" || r.finishReason === "insufficient_system_resource")) {
+        log({ event: "step_redo", reason: r.finishReason, maxTokens: config.maxToolStepTokens });
         r = await callModel(config.maxFinalTokens);
         task.usage.add(r.usage, model);
         used();

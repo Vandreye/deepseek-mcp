@@ -19,6 +19,8 @@ export interface TaskRecord {
   model: ModelKey;
   workspace: string;
   readOnly: boolean;
+  /** web_search / web_fetch are available (read-only tasks only). */
+  web?: boolean;
   messages: ChatMessage[];
   /** Content of each file before this task first changed it (null = file was new). */
   originals: Map<string, string | null>;
@@ -43,7 +45,7 @@ export class TaskStore {
 
   constructor(private readonly keep = 50) {}
 
-  create(init: Pick<TaskRecord, "type" | "model" | "workspace" | "readOnly">): TaskRecord {
+  create(init: Pick<TaskRecord, "type" | "model" | "workspace" | "readOnly" | "web">): TaskRecord {
     const id = `t${++this.counter}`;
     const task: TaskRecord = {
       ...init,

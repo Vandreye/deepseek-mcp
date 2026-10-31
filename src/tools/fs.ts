@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { WORKSPACE_DIR_NAME } from "../config.js";
-import { resolveSafe } from "../safety/paths.js";
+import { isSecretFile, resolveSafe } from "../safety/paths.js";
 import type { TaskRecord } from "../tasks.js";
 
 export const IGNORED_DIRS = new Set([
@@ -51,7 +51,8 @@ export function listDir(task: TaskRecord, p = ".", depth = 2): string {
         if (IGNORED_DIRS.has(e.name)) continue;
         lines.push(`${prefix}${e.name}/`);
         if (level < depth) walk(path.join(dir, e.name), prefix + "  ", level + 1);
-      } else {
+      } else if (!isSecretFile(path.relative(task.workspace, path.join(dir, e.name)).replace(/\\/g, "/"))) {
+        // Secret files (.env, keys) are hidden here too, as in read_file, grep and glob.
         lines.push(`${prefix}${e.name}`);
       }
     }

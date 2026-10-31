@@ -44,7 +44,7 @@ function workspaceOf(ws?: string): string {
 function askUser(): AskUser | undefined {
   if (config.elicitation === "off") return undefined;
   if (!server.server.getClientCapabilities()?.elicitation) return undefined;
-  return async (message) => {
+  return async (message, signal) => {
     const r = await server.server.elicitInput(
       {
         message,
@@ -54,7 +54,7 @@ function askUser(): AskUser | undefined {
           required: ["approve"],
         },
       },
-      { timeout: 10 * 60_000 },
+      { timeout: 10 * 60_000, signal }, // a cancelled task closes its open prompt
     );
     return r.action === "accept" && r.content?.approve === true;
   };
@@ -90,6 +90,7 @@ const taskTool = server.registerTool(
         .describe("Input-token budget for this call, shared by all areas (cached counts ~10%). Default 3M per task/area"),
       areas: z.array(z.string().min(1)).min(2).max(8).optional()
         .describe("Split into parallel sub-tasks, one per area (e.g. [\"auth\",\"feeds\"]), one merged report"),
+      web: z.boolean().optional().describe("Give DeepSeek web_search/web_fetch (read-only tasks only)"),
       user_override: z.boolean().default(false).describe("User explicitly asked for DeepSeek"),
     },
   },
@@ -109,7 +110,7 @@ const taskTool = server.registerTool(
       if (block) return text(block, true);
       const readOnly = a.read_only ?? ["plan", "review", "research", "question"].includes(a.type);
       const input = {
-        task: a.task, type: a.type, model: (a.model ?? modelFor(loadModels(workspace, HOME_DIR), a.type)) as ModelKey, workspace, readOnly,
+        task: a.task, type: a.type, model: (a.model ?? modelFor(loadModels(workspace, HOME_DIR), a.type)) as ModelKey, workspace, readOnly, web: a.web,
         files: a.files, contextGlobs: a.context_globs, maxSteps: a.max_steps, maxTokens: a.max_tokens,
       };
       if (a.areas?.length) {
@@ -270,7 +271,7 @@ server.registerTool(
     description: "Carry out queued DeepSeek requests (deletes/commands). ONLY when the user explicitly approves these ids.",
     inputSchema: { ids: z.array(z.string()).min(1) },
   },
-  async (a) => {
+  async (a, extra) => {
     const ids = [...new Set(a.ids)]; // the same id twice must not run twice
     const items = ids.map((id) => approvals.get(id));
     const missing = ids.filter((_, i) => !items[i]);
@@ -295,7 +296,7 @@ server.registerTool(
       if (task) trackDeletes(task, item!);
       let result: string;
       try {
-        result = await executeAction(item!, config.commandTimeoutMs);
+        result = await executeAction(item!, config.commandTimeoutMs, extra.signal);
       } catch (e) {
         result = `failed: ${(e as Error).message}`;
       }
@@ -314,7 +315,7 @@ server.registerTool(
   { description: "Discard queued DeepSeek requests.", inputSchema: { ids: z.array(z.string()).min(1) } },
   async (a) => {
     const out: string[] = [];
-    for (const id of a.ids) {
+    for (const id of new Set(a.ids)) {
       const item = approvals.get(id);
       if (!item) {
         out.push(`${id}: unknown`);

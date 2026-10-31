@@ -23,7 +23,7 @@ export interface PendingAction {
  * Asks the user directly (MCP elicitation). Returns true only on explicit approval.
  * Undefined when the client cannot show such prompts.
  */
-export type AskUser = (message: string) => Promise<boolean>;
+export type AskUser = (message: string, signal?: AbortSignal) => Promise<boolean>;
 
 export class ApprovalStore {
   private items = new Map<string, PendingAction>();
@@ -60,7 +60,7 @@ export function describeAction(a: PendingAction): string {
  * Carry out an approved action. Deleted files are moved to
  * <workspace>/.deepseek-mcp/trash/<id>/ rather than destroyed, so they can be restored.
  */
-export async function executeAction(a: PendingAction, commandTimeoutMs: number): Promise<string> {
+export async function executeAction(a: PendingAction, commandTimeoutMs: number, signal?: AbortSignal): Promise<string> {
   if (a.kind === "delete") {
     const trash = path.join(a.workspace, WORKSPACE_DIR_NAME, "trash", a.id);
     const done: string[] = [];
@@ -78,7 +78,7 @@ export async function executeAction(a: PendingAction, commandTimeoutMs: number):
     }
     return `${done.join("; ")} (copies kept in ${WORKSPACE_DIR_NAME}/trash/${a.id})`;
   }
-  const r = await runShell(a.command!, a.workspace, commandTimeoutMs);
+  const r = await runShell(a.command!, a.workspace, commandTimeoutMs, signal);
   const status = r.timedOut ? "timed out" : `exit ${r.exitCode}`;
   return `\`${a.command}\` → ${status}\n${r.output.slice(-2000)}`;
 }

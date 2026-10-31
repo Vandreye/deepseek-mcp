@@ -56,6 +56,7 @@ Each value is `deepseek`, `claude` or `ask`. With `ask`, Claude asks you each ti
 | `/ds-effort`, `/ds-effort high`, `/ds-effort review high code off` | Set DeepSeek's thinking effort (off, low, medium, high, auto) per task type; stored in `efforts.json` |
 | `/ds <task>` | Send this task to DeepSeek, whatever the routing says |
 | `/ds-plan`, `/ds-code`, `/ds-review`, `/ds-fix`, `/ds-debug`, `/ds-tests` | Same, with a specific role |
+| `/ds-research <question>` | DeepSeek researches the codebase and the web (read-only, cites URLs) |
 | `/ds-approve [ids\|all\|reject ids]` | See or answer DeepSeek's pending deletes and commands |
 
 You can also just say it: "have DeepSeek review this" or "do this one yourself".
@@ -64,7 +65,7 @@ You can also just say it: "have DeepSeek review this" or "do this one yourself".
 
 | Tool | Purpose |
 |---|---|
-| `deepseek_task` | Delegate a task. DeepSeek works until done and returns a compact report. `task_id` continues an earlier task cheaply, because DeepSeek's prompt cache is reused. `areas: ["auth", "feeds"]` splits a big job into parallel sub-tasks with one merged report. `max_steps` / `max_tokens` raise the budget for one call. |
+| `deepseek_task` | Delegate a task. DeepSeek works until done and returns a compact report. `task_id` continues an earlier task cheaply, because DeepSeek's prompt cache is reused. `areas: ["auth", "feeds"]` splits a big job into parallel sub-tasks with one merged report. `max_steps` / `max_tokens` raise the budget for one call. `web: true` gives read-only tasks `web_search` / `web_fetch`. |
 | `deepseek_ask` | One-shot question with optional files, no tools. A cheap second opinion. |
 | `deepseek_get_report` | Fetch details only when needed: summary, files, a diff, command output, or the tool-call trace. |
 | `deepseek_routing` | Show or change the routing and the default model per task type. |
@@ -72,7 +73,7 @@ You can also just say it: "have DeepSeek review this" or "do this one yourself".
 
 ## Models and cost
 
-The default is `deepseek-flash`. Claude can pick `pro` (`deepseek-v4-pro`) for hard tasks. To always use `pro` for a task type, set it once with `/route review pro`; it is stored in `~/.deepseek-mcp/models.json` (or `<project>/.deepseek-mcp/models.json`), for example `{ "review": "pro", "default": "flash" }`. Every report ends with DeepSeek's token use and a cost estimate at peak prices; off-peak is half.
+The default is `deepseek-flash`. Claude can pick `pro` (`deepseek-v4-pro`) for hard tasks. To always use `pro` for a task type, set it once with `/route review pro`; it is stored in `~/.deepseek-mcp/models.json` (or `<project>/.deepseek-mcp/models.json`), for example `{ "review": "pro", "default": "flash" }`. Every report ends with DeepSeek's token use (including how much went on thinking) and a cost estimate that applies DeepSeek's off-peak half price outside 01:00-04:00 and 06:00-10:00 UTC on weekdays. Chinese public holidays are not tracked, so the estimate stays an upper bound. Web searches and fetches cost $0.75 per 1,000.
 
 Long runs stay cheap: cached input (the re-sent history) counts at 10% toward the token budget, and once a prompt passes about 200k tokens, old tool outputs are shortened to one-line summaries.
 
@@ -95,12 +96,15 @@ All settings are optional environment variables; see [.env.example](.env.example
 - `DEEPSEEK_MAX_STEPS`: how many tool-loop steps a task may take (default 25)
 - `DEEPSEEK_MAX_STEPS_REVIEW` / `_RESEARCH` / `_DEBUG` / `_PLAN`: higher limits for those types (defaults 80 / 80 / 50 / 40)
 - `DEEPSEEK_THINKING=enabled`: turn thinking on for every type; it is off for code/tests/docs/question/general and on at `low` effort for plan/review/debug/bugfix/research. Per type: `DEEPSEEK_THINKING_<TYPE>`, `DEEPSEEK_REASONING_EFFORT[_<TYPE>]`
-- `DEEPSEEK_ELICITATION=off`: stop the server prompting you directly
+- `DEEPSEEK_ELICITATION=off`: stop the server prompting you directly (then `approve_actions` acts on Claude's word)
+- `DEEPSEEK_WEB=off`: never offer `web_search` / `web_fetch`
+- `DEEPSEEK_STRICT_TOOLS=on`: strict tool schemas (DeepSeek beta; calls go to the `/beta` API), so tool arguments always match
 
 ## Development
 
 ```
 npm test            # unit tests (no API key needed)
+npm run check:live  # live checks of strict tools and web search (uses your API key, < $0.01)
 npm run build
 npm run inspect     # MCP Inspector, to call the tools by hand
 ```

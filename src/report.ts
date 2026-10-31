@@ -166,7 +166,8 @@ export type ReportSection = (typeof REPORT_SECTIONS)[number];
 export function reportSection(task: TaskRecord, section: ReportSection, filePath?: string): string {
   switch (section) {
     case "summary":
-      return task.finalText || "(no summary)";
+      // A report can reach DEEPSEEK_MAX_FINAL_TOKENS (~16k tokens); cap what Claude has to read.
+      return task.finalText ? truncate(task.finalText, 40_000) : "(no summary)";
     case "files": {
       const ch = fileChanges(task);
       return ch.length ? ch.map((c) => `${c.kind} ${c.rel} +${c.added}/-${c.removed}`).join("\n") : "No file changes.";
