@@ -35,9 +35,16 @@ const opt = (name, dflt) => {
   const i = argv.indexOf(`--${name}`);
   return i >= 0 ? argv[i + 1] : dflt;
 };
-const versionSpecs = opt("versions", "current=.").split(",").map((s) => {
-  const [label, ref] = s.includes("=") ? s.split("=") : [s, s];
-  return { label, ref };
+// label=ref, optionally with settings: label=ref?DEEPSEEK_STRICT_TOOLS=off&DEEPSEEK_WEB=off
+const versionSpecs = opt("versions", "current=.").split(",").map((spec) => {
+  const [main, query = ""] = spec.split("?");
+  const eq = main.indexOf("=");
+  const [label, ref] = eq >= 0 ? [main.slice(0, eq), main.slice(eq + 1)] : [main, main];
+  const env = Object.fromEntries(query.split("&").filter(Boolean).map((kv) => {
+    const i = kv.indexOf("=");
+    return [kv.slice(0, i), kv.slice(i + 1)];
+  }));
+  return { label, ref, env };
 });
 const taskIds = opt("tasks", "all");
 const tasks = taskIds === "all" ? TASKS : taskIds.split(",").map((id) => {
@@ -72,11 +79,15 @@ if (!KEY) {
 const npm = process.platform === "win32" ? "npm.cmd" : "npm";
 const sh = (cmd, cwd) => execSync(cmd, { cwd, stdio: "pipe", encoding: "utf8" }).trim();
 
-function prepareVersion({ label, ref }) {
+let builtWorkingTree = false;
+function prepareVersion({ label, ref, env }) {
   if (ref === "." || ref === "current") {
-    console.log(`[${label}] building this working tree`);
-    sh(`${npm} run build`, repo);
-    return { label, ref: "working tree", sha: sh("git rev-parse --short HEAD", repo) + (sh("git status --porcelain", repo) ? "+dirty" : ""), dir: repo };
+    if (!builtWorkingTree) {
+      console.log(`[${label}] building this working tree`);
+      sh(`${npm} run build`, repo);
+      builtWorkingTree = true;
+    }
+    return { label, ref: "working tree", env, sha: sh("git rev-parse --short HEAD", repo) + (sh("git status --porcelain", repo) ? "+dirty" : ""), dir: repo };
   }
   const sha = sh(`git rev-parse --short ${ref}`, repo);
   const dir = path.join(here, ".versions", sha);
@@ -86,7 +97,7 @@ function prepareVersion({ label, ref }) {
     sh(`${npm} ci --no-audit --no-fund`, dir);
     sh(`${npm} run build`, dir);
   }
-  return { label, ref, sha, dir };
+  return { label, ref, env, sha, dir };
 }
 
 // ---------- one run ----------
@@ -99,7 +110,7 @@ function connect(version, workspace, home, probeFile, extraEnv = {}) {
     cwd: workspace,
     env: {
       ...cleanEnv, DEEPSEEK_API_KEY: KEY, DEEPSEEK_MCP_HOME: home, DEEPSEEK_WORKSPACE: workspace,
-      BENCH_PROBE_FILE: probeFile, ...extraEnv,
+      BENCH_PROBE_FILE: probeFile, ...version.env, ...extraEnv,
     },
     stderr: "pipe",
   });
@@ -237,7 +248,7 @@ fs.mkdirSync(path.dirname(outFile), { recursive: true });
 const versions = versionSpecs.map(prepareVersion);
 for (const v of versions) {
   v.overhead = await measureOverhead(v);
-  const meta = { kind: "version", version: v.label, ref: v.ref, sha: v.sha, overhead: v.overhead, model, at: new Date().toISOString() };
+  const meta = { kind: "version", version: v.label, ref: v.ref, settings: v.env, sha: v.sha, overhead: v.overhead, model, at: new Date().toISOString() };
   fs.appendFileSync(outFile, JSON.stringify(meta) + "\n");
   console.log(`[${v.label}] ${v.sha}: ${v.overhead.tools} tools, ~${v.overhead.tokens} tokens of fixed overhead per Claude session`);
 }

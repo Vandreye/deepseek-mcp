@@ -7,6 +7,7 @@ npm run bench -- --versions before=13c8626,now=. --reps 3
 npm run bench:compare -- bench/results/<file>.jsonl
 ```
 
+- Compare settings too: `--versions strict=.,plain=.?DEEPSEEK_STRICT_TOOLS=off` (several settings: `?A=1&B=2`).
 - A version is `.` (this working tree, rebuilt) or any git ref. Refs are checked out into `bench/.versions/<sha>` and built once.
 - `--tasks review-orders,bugfix-slug` runs a subset; `--parallel 3` runs that many at once; `--budget 3` stops at $3 (peak prices); `--model pro` switches model.
 - Results go to `bench/results/<time>.jsonl` (one line per run) and a `.md` summary next to it.

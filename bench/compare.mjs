@@ -67,7 +67,8 @@ export function comparisonText(files) {
   out.push(head(["version", "commit", "runs", "fixed overhead per Claude session"]));
   for (const v of versions) {
     const m = meta.find((x) => x.version === v);
-    out.push(`| ${v} | ${m?.sha ?? "?"} | ${runs.filter((r) => r.version === v).length} | ~${m?.overhead?.tokens ?? "?"} tokens (${m?.overhead?.tools ?? "?"} tools) |`);
+    const settings = Object.entries(m?.settings ?? {}).map(([k, val]) => `${k}=${val}`).join(" ");
+    out.push(`| ${v} | ${m?.sha ?? "?"}${settings ? ` (${settings})` : ""} | ${runs.filter((r) => r.version === v).length} | ~${m?.overhead?.tokens ?? "?"} tokens (${m?.overhead?.tools ?? "?"} tools) |`);
   }
 
   const two = versions.length === 2;
