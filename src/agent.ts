@@ -101,9 +101,16 @@ export async function continueTask(task: TaskRecord, message: string, deps: Agen
 
 const PARALLEL_TOOLS = new Set(["read_file", "list_dir", "glob", "grep"]);
 
+/** DeepSeek's raw tool-call markup (uses fullwidth bars), up to its closing tag or the end. */
+const DSML_CALLS = /<[｜|]+DSML[｜|]+tool_calls>[\s\S]*?(?:<\/[｜|]+DSML[｜|]+tool_calls>|$)/g;
+
 /** The reply text, flagged when it still ran into the output cap. */
 function withCutNote(r: { message: ChatMessage; finishReason: string }): string {
-  const text = (r.message.content ?? "").trim();
+  // With tools off, DeepSeek sometimes writes tool calls as raw markup; that is not report text.
+  const text = (r.message.content ?? "").replace(DSML_CALLS, "").trim();
+  if (!text && (r.message.content ?? "").includes("DSML")) {
+    return "[DeepSeek stopped while still wanting to use tools and wrote no report. Follow up with task_id to get one.]";
+  }
   return r.finishReason === "length"
     ? `${text}\n\n[Report cut off at the output limit; raise DEEPSEEK_MAX_FINAL_TOKENS or lower /ds-effort.]`
     : text;
@@ -149,36 +156,31 @@ async function runLoop(task: TaskRecord, deps: AgentDeps, maxSteps: number, maxT
         task.status = "token_limit";
         break;
       }
-      const r = await chat(
+      const callModel = (cap: number) => chat(
         {
           model: model.id, messages: task.messages, tools,
-          max_tokens: config.maxToolStepTokens, thinking, reasoning_effort: reasoningEffort,
+          max_tokens: cap, thinking, reasoning_effort: reasoningEffort,
         },
         deps.signal,
       );
+      let r = await callModel(config.maxToolStepTokens);
       task.usage.add(r.usage, model);
       task.steps++;
       used();
+      // Cut off by the small step cap (thinking eats into it), either mid-report or mid-tool-call:
+      // drop the reply and redo the step with the report cap. Tools stay on, so a step that wanted
+      // more tools still gets them instead of writing the calls out as text. Same prefix, mostly cached.
+      if (!r.message.tool_calls?.length && r.finishReason === "length") {
+        log({ event: "step_cut", maxTokens: config.maxToolStepTokens });
+        r = await callModel(config.maxFinalTokens);
+        task.usage.add(r.usage, model);
+        used();
+      }
 
       const calls = r.message.tool_calls ?? [];
       if (calls.length === 0) {
-        let final = r;
-        // The report hit the small tool-step cap (thinking eats into it): drop the cut-off reply
-        // and ask again with the report cap. Same prefix, so the retry is mostly cached.
-        if (r.finishReason === "length") {
-          log({ event: "report_cut", maxTokens: config.maxToolStepTokens });
-          final = await chat(
-            {
-              model: model.id, messages: task.messages, tools, tool_choice: "none",
-              max_tokens: config.maxFinalTokens, thinking, reasoning_effort: reasoningEffort,
-            },
-            deps.signal,
-          );
-          task.usage.add(final.usage, model);
-          used();
-        }
-        task.messages.push(final.message);
-        task.finalText = withCutNote(final);
+        task.messages.push(r.message);
+        task.finalText = withCutNote(r);
         task.status = "done";
         log({ event: "done", steps: task.steps, cost: task.usage.cost });
         return;

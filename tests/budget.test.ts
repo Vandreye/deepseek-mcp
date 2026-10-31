@@ -177,7 +177,8 @@ describe("report cut off by the tool-step cap", () => {
     const task = await startTask(input(), deps(chat, { ...testConfig(), compactTokens: 1e9 }));
     expect(task.status).toBe("done");
     expect(task.finalText).toBe("full report");
-    expect(requests[2]).toMatchObject({ tool_choice: "none", max_tokens: 16000 });
+    expect(requests[2]).toMatchObject({ max_tokens: 16000 });
+    expect(requests[2].tool_choice).not.toBe("none"); // tools stay on for the redo
     expect(task.messages.some((m) => m.content === "half a rep")).toBe(false);
   });
 
@@ -185,5 +186,30 @@ describe("report cut off by the tool-step cap", () => {
     const { chat } = cutting(["tool_calls", "length", "length"]);
     const task = await startTask(input(), deps(chat, { ...testConfig(), compactTokens: 1e9 }));
     expect(task.finalText).toMatch(/^full report\n\n\[Report cut off/);
+  });
+
+  it("keeps working when the redone step asks for tools", async () => {
+    const requests: ChatRequest[] = [];
+    const replies: ChatMessage[] = [{ role: "assistant", content: "" }, listCall("y"), { role: "assistant", content: "report" }];
+    const finishes = ["length", "tool_calls", "stop"];
+    const chat: ChatFn = async (req) => {
+      requests.push(structuredClone(req));
+      return { message: replies.shift()!, usage: { prompt_tokens: 1000, completion_tokens: 10 }, finishReason: finishes.shift()! };
+    };
+    const task = await startTask(input(), deps(chat, { ...testConfig(), compactTokens: 1e9 }));
+    expect(task.finalText).toBe("report");
+    expect(task.messages.some((m) => m.role === "tool" && m.tool_call_id === "y")).toBe(true);
+  });
+
+  it("never returns raw tool-call markup as the report", async () => {
+    const dsml = `<｜｜DSML｜｜tool_calls>
+<｜｜DSML｜｜invoke name="read_file">x</｜｜DSML｜｜invoke>
+</｜｜DSML｜｜tool_calls>`;
+    const { chat } = scripted([{ role: "assistant", content: dsml }], { prompt_tokens: 1000, completion_tokens: 10 });
+    const task = await startTask(input(), deps(chat, { ...testConfig(), compactTokens: 1e9 }));
+    expect(task.finalText).toMatch(/wrote no report/);
+    const mixed = scripted([{ role: "assistant", content: `Findings: none.\n${dsml}` }], { prompt_tokens: 1000, completion_tokens: 10 });
+    const t2 = await startTask(input(), deps(mixed.chat, { ...testConfig(), compactTokens: 1e9 }));
+    expect(t2.finalText).toBe("Findings: none.");
   });
 });
