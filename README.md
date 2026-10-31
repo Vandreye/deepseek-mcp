@@ -52,6 +52,7 @@ Each value is `deepseek`, `claude` or `ask`. With `ask`, Claude asks you each ti
 | `/route` | Open a menu to pick who handles each task type |
 | `/route show` | Show the routing |
 | `/route code deepseek review claude` | Change it (add `--project` to change only this project) |
+| `/route review pro debug pro` | Set DeepSeek's default model per task type |
 | `/ds <task>` | Send this task to DeepSeek, whatever the routing says |
 | `/ds-plan`, `/ds-code`, `/ds-review`, `/ds-fix`, `/ds-debug`, `/ds-tests` | Same, with a specific role |
 | `/ds-approve [ids\|all\|reject ids]` | See or answer DeepSeek's pending deletes and commands |
@@ -65,12 +66,12 @@ You can also just say it: "have DeepSeek review this" or "do this one yourself".
 | `deepseek_task` | Delegate a task. DeepSeek works until done and returns a compact report. `task_id` continues an earlier task cheaply, because DeepSeek's prompt cache is reused. |
 | `deepseek_ask` | One-shot question with optional files, no tools. A cheap second opinion. |
 | `deepseek_get_report` | Fetch details only when needed: summary, files, a diff, command output, or the tool-call trace. |
-| `deepseek_routing` | Show or change the routing. |
+| `deepseek_routing` | Show or change the routing and the default model per task type. |
 | `list_pending_approvals` / `approve_actions` / `reject_actions` | Handle the delete and command queue. |
 
 ## Models and cost
 
-The default is `deepseek-flash`. Claude can pick `pro` (`deepseek-v4-pro`) for hard tasks. Every report ends with DeepSeek's token use and a cost estimate at peak prices; off-peak is half.
+The default is `deepseek-flash`. Claude can pick `pro` (`deepseek-v4-pro`) for hard tasks. To always use `pro` for a task type, set it once with `/route review pro`; it is stored in `~/.deepseek-mcp/models.json` (or `<project>/.deepseek-mcp/models.json`), for example `{ "review": "pro", "default": "flash" }`. Every report ends with DeepSeek's token use and a cost estimate at peak prices; off-peak is half.
 
 ## Safety
 
@@ -88,7 +89,8 @@ The `.deepseek-mcp/` folder ignores itself in git.
 
 All settings are optional environment variables; see [.env.example](.env.example). Useful ones:
 - `DEEPSEEK_ALLOW_COMMANDS`: extra auto-allowed commands, for example `make test;cargo fmt --check`
-- `DEEPSEEK_MAX_STEPS`: how many tool-loop steps a task may take
+- `DEEPSEEK_MAX_STEPS`: how many tool-loop steps a task may take (default 25)
+- `DEEPSEEK_MAX_STEPS_REVIEW` / `_RESEARCH` / `_DEBUG` / `_PLAN`: higher limits for those types (defaults 80 / 80 / 50 / 40)
 - `DEEPSEEK_THINKING=disabled`: faster and cheaper, but less careful
 - `DEEPSEEK_ELICITATION=off`: stop the server prompting you directly
 

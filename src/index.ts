@@ -9,8 +9,9 @@ import { HOME_DIR, loadConfig, type ModelKey } from "./config.js";
 import { createDeepSeekChat, UsageTotals, type ChatFn } from "./deepseek.js";
 import { compactReport, REPORT_SECTIONS, reportSection } from "./report.js";
 import {
-  checkRoute, describeRouting, loadRouting, projectRoutingPath, ROUTES, saveRouting, TASK_TYPES,
-  userRoutingPath, type RoutingTable, type TaskType,
+  checkRoute, describeModels, describeRouting, loadModels, loadRouting, MODEL_KEYS, modelFor, projectModelsPath,
+  projectRoutingPath, ROUTES, saveModels, saveRouting, TASK_TYPES, userModelsPath, userRoutingPath,
+  type ModelTable, type RoutingTable, type TaskType,
 } from "./routing.js";
 import { resolveSafe, realWorkspace } from "./safety/paths.js";
 import { TaskStore, truncate } from "./tasks.js";
@@ -60,12 +61,14 @@ function askUser(): AskUser | undefined {
 
 function taskDescription(): string {
   let routing = "unavailable";
+  let models = "flash unless set";
   try {
     routing = describeRouting(loadRouting(workspaceOf(), HOME_DIR));
+    models = describeModels(loadModels(workspaceOf(), HOME_DIR));
   } catch {
     /* default workspace may be invalid; routing is checked on each call anyway */
   }
-  return `Hand a task to DeepSeek (cheap subagent; reads/writes files, runs tests, works until done). USER ROUTING: ${routing}. Only use for types routed to deepseek, or when the user explicitly asked for DeepSeek (set user_override). "ask" = ask the user first. Give file paths, not contents. Returns a compact report.`;
+  return `Hand a task to DeepSeek (cheap subagent; reads/writes files, runs tests, works until done). USER ROUTING: ${routing}. Only use for types routed to deepseek, or when the user explicitly asked for DeepSeek (set user_override). "ask" = ask the user first. Default models (user's choice; omit model to use them): ${models}. Give file paths, not contents. Big jobs (e.g. whole-project review): one call per area, then merge. Returns a compact report.`;
 }
 
 const taskTool = server.registerTool(
@@ -78,7 +81,7 @@ const taskTool = server.registerTool(
       task_id: z.string().optional().describe("Continue an earlier task"),
       files: z.array(z.string()).optional().describe("Relevant file paths"),
       context_globs: z.array(z.string()).optional(),
-      model: z.enum(["flash", "pro"]).optional().describe("Default flash; pro for hard tasks"),
+      model: z.enum(MODEL_KEYS).optional().describe("Omit to use the user's default for this type"),
       workspace: z.string().optional().describe("Absolute project folder (default: current)"),
       read_only: z.boolean().optional().describe("Default true for plan/review/research"),
       detail: z.enum(["brief", "full"]).default("brief"),
@@ -103,7 +106,7 @@ const taskTool = server.registerTool(
       const readOnly = a.read_only ?? ["plan", "review", "research", "question"].includes(a.type);
       const task = await startTask(
         {
-          task: a.task, type: a.type, model: (a.model ?? "flash") as ModelKey, workspace, readOnly,
+          task: a.task, type: a.type, model: (a.model ?? modelFor(loadModels(workspace, HOME_DIR), a.type)) as ModelKey, workspace, readOnly,
           files: a.files, contextGlobs: a.context_globs, maxSteps: a.max_steps,
         },
         deps,
@@ -132,7 +135,7 @@ server.registerTool(
     inputSchema: {
       question: z.string(),
       files: z.array(z.string()).optional().describe("Files whose contents DeepSeek should see"),
-      model: z.enum(["flash", "pro"]).optional(),
+      model: z.enum(MODEL_KEYS).optional(),
       workspace: z.string().optional(),
       user_override: z.boolean().default(false),
     },
@@ -148,7 +151,7 @@ server.registerTool(
         context += `\n\n--- ${s.rel} ---\n${fs.readFileSync(s.abs, "utf8")}`;
         if (context.length > 400_000) throw new Error("Files are too large for deepseek_ask; use deepseek_task.");
       }
-      const key = (a.model ?? "flash") as ModelKey;
+      const key = (a.model ?? modelFor(loadModels(workspace, HOME_DIR), "question")) as ModelKey;
       const r = await chat(
         {
           model: config.models[key].id,
@@ -171,9 +174,10 @@ server.registerTool(
 server.registerTool(
   "deepseek_routing",
   {
-    description: "Show or change which agent handles each task type (the user's choice). Only change it when the user asks.",
+    description: "Show or change which agent handles each task type, and DeepSeek's default model per type (the user's choice). Only change it when the user asks.",
     inputSchema: {
       set: z.record(z.string(), z.enum(ROUTES)).optional().describe('e.g. {"code":"deepseek","review":"claude"}'),
+      models: z.record(z.string(), z.enum(MODEL_KEYS)).optional().describe('Default DeepSeek model per type, e.g. {"review":"pro","default":"flash"}'),
       scope: z.enum(["user", "project"]).default("user").describe("user = all projects; project = this workspace only"),
       workspace: z.string().optional(),
     },
@@ -181,17 +185,18 @@ server.registerTool(
   async (a) => {
     try {
       const workspace = workspaceOf(a.workspace);
-      if (a.set && Object.keys(a.set).length) {
-        const valid = [...TASK_TYPES, "default"] as string[];
-        const bad = Object.keys(a.set).filter((k) => !valid.includes(k));
-        if (bad.length) return text(`Unknown task type(s): ${bad.join(", ")}. Valid: ${valid.join(", ")}`, true);
-        saveRouting(a.scope, a.set as RoutingTable, workspace, HOME_DIR);
-        taskTool.update({ description: taskDescription() });
-      }
+      const valid = [...TASK_TYPES, "default"] as string[];
+      const bad = [...Object.keys(a.set ?? {}), ...Object.keys(a.models ?? {})].filter((k) => !valid.includes(k));
+      if (bad.length) return text(`Unknown task type(s): ${bad.join(", ")}. Valid: ${valid.join(", ")}`, true);
+      if (a.set && Object.keys(a.set).length) saveRouting(a.scope, a.set as RoutingTable, workspace, HOME_DIR);
+      if (a.models && Object.keys(a.models).length) saveModels(a.scope, a.models as ModelTable, workspace, HOME_DIR);
+      if (a.set || a.models) taskTool.update({ description: taskDescription() });
       const table = loadRouting(workspace, HOME_DIR);
       return text(
-        `Routing: ${describeRouting(table)}\nUser file: ${userRoutingPath(HOME_DIR)}\nProject file: ${projectRoutingPath(workspace)}` +
-          `\nTypes: ${TASK_TYPES.join(", ")}, default. Values: deepseek | claude | ask.`,
+        `Routing: ${describeRouting(table)}\nModels: ${describeModels(loadModels(workspace, HOME_DIR))}` +
+          `\nUser files: ${userRoutingPath(HOME_DIR)}, ${userModelsPath(HOME_DIR)}` +
+          `\nProject files: ${projectRoutingPath(workspace)}, ${projectModelsPath(workspace)}` +
+          `\nTypes: ${TASK_TYPES.join(", ")}, default. Routing values: deepseek | claude | ask. Model values: flash | pro.`,
       );
     } catch (e) {
       return text(`deepseek_routing failed: ${(e as Error).message}`, true);

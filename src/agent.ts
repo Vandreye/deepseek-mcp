@@ -1,5 +1,5 @@
 import type { ApprovalStore, AskUser } from "./approvals.js";
-import type { Config, ModelKey } from "./config.js";
+import { stepsFor, type Config, type ModelKey } from "./config.js";
 import type { ChatFn } from "./deepseek.js";
 import { auditLogger, ensureWorkspaceDir } from "./log.js";
 import { systemPrompt, userPrompt } from "./prompts.js";
@@ -34,10 +34,16 @@ export async function startTask(input: NewTask, deps: AgentDeps): Promise<TaskRe
   });
   ensureWorkspaceDir(input.workspace);
   task.messages.push(
-    { role: "system", content: systemPrompt(input.type, input.workspace, input.readOnly) },
+    {
+      role: "system",
+      content: systemPrompt(input.type, input.workspace, input.readOnly, {
+        maxSteps: input.maxSteps ?? stepsFor(deps.config, input.type),
+        maxTokens: deps.config.maxTaskTokens,
+      }),
+    },
     { role: "user", content: userPrompt(input.task, input.files, input.contextGlobs) },
   );
-  await runLoop(task, deps, input.maxSteps ?? deps.config.maxSteps);
+  await runLoop(task, deps, input.maxSteps ?? stepsFor(deps.config, input.type));
   return task;
 }
 
@@ -48,7 +54,7 @@ export async function continueTask(task: TaskRecord, message: string, deps: Agen
   task.messages.push({ role: "user", content: prefix + message.trim() });
   task.status = "running";
   task.error = undefined;
-  await runLoop(task, deps, maxSteps ?? deps.config.maxSteps);
+  await runLoop(task, deps, maxSteps ?? stepsFor(deps.config, task.type));
   return task;
 }
 
@@ -59,6 +65,14 @@ async function runLoop(task: TaskRecord, deps: AgentDeps, maxSteps: number): Pro
   const log = auditLogger(task.workspace, task.id);
   const ctx = { task, config, approvals: deps.approvals, askUser: deps.askUser, log };
   const inputAtStart = task.usage.input;
+  const stepsAtStart = task.steps;
+  const run = { maxSteps, steps: 0, maxTokens: config.maxTaskTokens, inputTokens: 0 };
+  task.run = run;
+  const used = () => {
+    run.steps = task.steps - stepsAtStart;
+    run.inputTokens = task.usage.input - inputAtStart;
+  };
+  let warned = false;
 
   log({ event: "start", type: task.type, model: model.id, readOnly: task.readOnly });
   try {
@@ -71,6 +85,7 @@ async function runLoop(task: TaskRecord, deps: AgentDeps, maxSteps: number): Pro
       task.usage.add(r.usage, model);
       task.steps++;
       task.messages.push(r.message);
+      used();
 
       const calls = r.message.tool_calls ?? [];
       if (calls.length === 0) {
@@ -82,6 +97,16 @@ async function runLoop(task: TaskRecord, deps: AgentDeps, maxSteps: number): Pro
       for (const call of calls) {
         const result = await executeTool(ctx, call.function.name, call.function.arguments);
         task.messages.push({ role: "tool", tool_call_id: call.id, content: result });
+      }
+      // Warn once when the budget runs low, so it wraps up instead of stopping mid-area.
+      const stepsLeft = maxSteps - step;
+      const tokenShare = run.inputTokens / config.maxTaskTokens;
+      if (!warned && stepsLeft > 0 && (stepsLeft <= Math.max(2, Math.ceil(maxSteps * 0.2)) || tokenShare >= 0.8)) {
+        warned = true;
+        const last = task.messages[task.messages.length - 1];
+        last.content += `
+
+[Budget: ${stepsLeft} of ${maxSteps} steps left, ${Math.round(tokenShare * 100)}% of the token budget used. Finish the current area, then write your report with "Not done: …".]`;
       }
       deps.onProgress?.(step, maxSteps, calls.map((c) => c.function.name).join(", "));
     }
@@ -95,6 +120,7 @@ async function runLoop(task: TaskRecord, deps: AgentDeps, maxSteps: number): Pro
     const r = await chat({ model: model.id, messages: task.messages, tools, tool_choice: "none" }, deps.signal);
     task.usage.add(r.usage, model);
     task.messages.push(r.message);
+    used();
     task.finalText = (r.message.content ?? "").trim();
     log({ event: task.status, steps: task.steps, cost: task.usage.cost });
   } catch (e) {

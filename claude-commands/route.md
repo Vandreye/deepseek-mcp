@@ -1,13 +1,15 @@
 ---
 description: Show or change which agent (DeepSeek or Claude) handles each task type
-argument-hint: "[show | type deepseek|claude|ask ...] [--project]"
+argument-hint: "[show | type deepseek|claude|ask|flash|pro ...] [--project]"
 ---
 Use the `deepseek_routing` MCP tool. Scope is "project" if "--project" is present, else "user".
 
-**With "<type> <deepseek|claude|ask>" pairs** (e.g. "code deepseek review claude"): set those directly.
+**With "<type> <value>" pairs** (e.g. "code deepseek review claude review pro"): set those directly in one call.
+- deepseek / claude / ask → `set` (who handles the type).
+- flash / pro → `models` (DeepSeek's default model for the type).
 Valid types: plan, code, review, bugfix, debug, research, tests, docs, question, general, default.
 
-**With "show"**: show the current routing only.
+**With "show"**: show the current routing and models only.
 
 **With no arguments: open a menu.**
 1. Call `deepseek_routing` with no `set` to read the current routing.

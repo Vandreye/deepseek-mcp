@@ -1,0 +1,50 @@
+# Improvement notes (from Claude, observed in use)
+
+Suggestions gathered while Claude used this MCP on other projects. Newest at the bottom.
+
+Each note is tagged:
+- **[server]**: needs a change to this MCP's code, prompt or defaults.
+- **[usage]**: Claude can do it today by calling the MCP differently. It could still be built in later.
+
+## 2026-10-31: reviews on EVE Ledger (Windows, Git Bash + PowerShell)
+
+### Run t1: review of one commit, flash, read-only
+- **[server] Self-check before reporting.** Its top two findings were wrong: it said a column was missing from a SELECT that does include it, and that a time window never closes when it does. One grep each would have caught them. Add a final step to DeepSeek's system prompt for review and debug: re-open every cited `file:line`, confirm the claim, and drop anything that can't be confirmed.
+- **[server] Commands fail on Windows.** `service/.venv/Scripts/python -m pytest ...` failed with "'service' is not recognized". The command runner uses `cmd.exe`, which doesn't handle forward-slash relative executables. Make relative executable paths absolute or convert them to Windows form, or run commands through Git Bash when it's available.
+- **[server] Step limit too low.** The default of 25 steps ran out on a single-commit review. Use a higher default for review, research and audit (around 80).
+- **[usage]** Until that changes, Claude passes `max_steps` on reviews.
+- **[server] Report cut mid-finding.** The inline result was cut off ("…[1880 chars cut]…") in the middle of a finding, so a second `deepseek_get_report` call was needed. Cut at whole findings, keep the findings list whole, and trim the command log first.
+- **[server] Noisy command log.** Failed commands repeat their full tail. Show just the error line.
+- **[server] No default model per task type.** Allow setting a default model for each task type (in `/route` or the config), so "use pro" doesn't have to be repeated.
+
+### Run t2: whole-project security review, pro, read-only, max_steps 150
+It stopped at the token limit after 32 steps, with 3.36M tokens in (3.0M cached), about $0.71. It read whole large files and ran out of room before covering the scheduler, collectors and Discord code.
+- **[server] Partial file reads.** Give the file-read tool offset and limit (or line ranges) if it lacks them. Have the prompt prefer grep and line ranges, and warn the model when a file is over N lines.
+- **[server] Plan the budget first.** Before it starts, have it estimate coverage and budget per area, and say which areas it will skip, rather than stopping partway.
+- **[usage] Split big reviews.** Claude can send one `deepseek_task` per area (auth, isolation, feeds and so on) and merge the reports. Claude can also tell it to use grep and line ranges in the task text.
+- **[server] Optional built-in split.** For a whole-project task, the server could fan out the sub-tasks itself, each with its own budget, and merge the reports.
+- **[server] Show which limit it hit.** Report the limit it stopped at and how much budget each area used.
+- **Good:** it said clearly what it did not cover ("Not done: …"). Keep that.
+
+### Runs t3 and t4: two area reviews sent side by side, pro, max_steps 80
+- t3 (feeds) finished in 37 steps (2.78M in, about $0.43), with useful findings. t4 (Discord) stopped at the **token limit** after 39 steps (3.16M in, 2.97M of it cached, about $0.63). So the token limit, not the step limit, is now what stops runs.
+- **[server] Count cached tokens separately.** 94% of input was cache hits, which cost about a tenth as much. Base the token limit on cost (cached tokens weighted lower), or have separate limits for new and cached input, so cheap cached re-reads don't end a run early.
+- **[server] Compact the history.** Input grows each step because the whole history is sent again. Past a threshold, replace old tool outputs with short summaries and keep the file:line notes. That keeps late steps cheap and leaves room to finish.
+- **[server] Allow a larger token budget.** Let `deepseek_task` take a `max_tokens` (or budget in $) for one call, like `max_steps`.
+- **Good:** finding quality improved. All t3 and t4 findings Claude checked were real (minor ones). The self-check and the "Not covered" lines work.
+
+## Status (2026-10-31)
+
+Done in the server:
+- Self-check: review, debug, research and bugfix prompts must re-open each cited `file:line` and drop what they can't confirm.
+- Windows: slashes in the program path are turned into backslashes before `cmd.exe` runs it (also for approved commands).
+- Step limits per type: review 80, research 80, debug 50, plan 40, others 25 (env `DEEPSEEK_MAX_STEPS_<TYPE>`).
+- Report: the summary is cut at whole items, keeps the trailing "Not done" part, and findings types get twice the room. The command log is trimmed first.
+- Command log: each failed command shows one error line instead of an 8-line tail.
+- Default model per type: `/route review pro`, stored in `models.json` (user, or per project).
+- Partial reads: `read_file` returns 400 lines by default and says how long the file is; the prompt says grep first, then read ranges.
+- Budget planning: review/research/debug/plan prompts state the step and token budget and ask for a plan per area up front. DeepSeek gets one warning when 20% of steps or 80% of tokens are left.
+- Limit shown: the report header says which limit stopped it, with numbers (for example `stopped at token limit (3.10M/3.00M input tokens, step 32/150)`).
+
+Not done:
+- Built-in fan-out of whole-project tasks. For now the `deepseek_task` description tells Claude to send one call per area and merge.

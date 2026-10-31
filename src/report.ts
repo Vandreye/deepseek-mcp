@@ -18,8 +18,74 @@ function latestCommands(task: TaskRecord): CommandRecord[] {
   return [...byCmd.values()];
 }
 
-function lastLines(text: string, n: number): string {
-  return text.trimEnd().split(/\r?\n/).slice(-n).map((l) => `    ${l.slice(0, 200)}`).join("\n");
+const ERROR_LINE = /error|fail|not recognized|not found|cannot|exception|assert|traceback|denied|✗|×/i;
+
+/** The single most useful line of a failed command's output. */
+export function errorLine(output: string): string {
+  const lines = output.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  const hit = [...lines].reverse().find((l) => ERROR_LINE.test(l)) ?? lines.at(-1) ?? "";
+  return hit.length > 160 ? hit.slice(0, 160) + "…" : hit;
+}
+
+function fmtTokens(n: number): string {
+  return n >= 1e6 ? `${(n / 1e6).toFixed(2)}M` : `${Math.round(n / 1000)}k`;
+}
+
+function statusText(task: TaskRecord): string {
+  const r = task.run;
+  if (task.status === "step_limit" && r) return `stopped at step limit (${r.steps}/${r.maxSteps} steps)`;
+  if (task.status === "token_limit" && r) {
+    return `stopped at token limit (${fmtTokens(r.inputTokens)}/${fmtTokens(r.maxTokens)} input tokens, step ${r.steps}/${r.maxSteps})`;
+  }
+  return STATUS[task.status];
+}
+
+/** Task types whose reply is a list of findings; they get more room so the list stays whole. */
+const FINDINGS_TYPES = new Set(["review", "research", "debug", "plan"]);
+
+const NOT_DONE = /^\W*(not done|not covered|left|remaining|skipped)\b/i;
+const ITEM_START = /^\s{0,3}([-*•]|\d+[.)]|#{1,6}\s|\*\*)/;
+
+/** Split text into items: a bullet, numbered or heading line plus its continuation lines. */
+function items(text: string): string[] {
+  const out: string[] = [];
+  for (const line of text.split(/\r?\n/)) {
+    const prev = out[out.length - 1];
+    if (prev === undefined || ITEM_START.test(line) || NOT_DONE.test(line) || line.trim() === "" || prev.trim() === "") out.push(line);
+    else out[out.length - 1] = prev + "\n" + line;
+  }
+  return out;
+}
+
+/**
+ * Shorten a summary without cutting an item in half. Keeps the first items (findings are
+ * ranked by severity) and the trailing "Not done" part, which tells Claude what is missing.
+ */
+export function cutSummary(text: string, budget: number, more: string): string {
+  if (text.length <= budget) return text;
+  const parts = items(text);
+  let tailStart = parts.length;
+  for (let i = parts.length - 1; i >= 0; i--) {
+    if (NOT_DONE.test(parts[i])) {
+      tailStart = i;
+      break;
+    }
+  }
+  const tail = parts.slice(tailStart).join("\n").trim();
+  const keepTail = tail.length > 0 && tail.length < budget / 3;
+  const end = keepTail ? tailStart : parts.length;
+  const room = budget - (keepTail ? tail.length : 0) - 100;
+  const head: string[] = [];
+  let len = 0;
+  for (let i = 0; i < end; i++) {
+    if (len + parts[i].length + 1 > room) break;
+    head.push(parts[i]);
+    len += parts[i].length + 1;
+  }
+  if (head.length === 0) head.push(parts[0].slice(0, Math.max(200, room)) + "…");
+  const cut = parts.slice(head.length, end).filter((p) => p.trim()).length;
+  const note = `…[${cut} more item${cut === 1 ? "" : "s"} cut; ${more}]`;
+  return [head.join("\n").trimEnd(), note, keepTail ? tail : ""].filter(Boolean).join("\n");
 }
 
 /** The short report Claude sees after each task. Kept small on purpose. */
@@ -30,17 +96,14 @@ export function compactReport(task: TaskRecord, approvals: ApprovalStore, maxCha
     parts.push("Files: " + changes.map((c) => `${c.kind} ${c.rel} +${c.added}/-${c.removed}`).join(" | "));
   }
 
-  const cmds = latestCommands(task).filter((c) => c.status !== "denied");
-  if (cmds.length) {
-    const line = cmds.slice(-8).map((c) => {
-      if (c.status === "timeout") return `TIMEOUT ${c.command}`;
-      return `${c.exitCode === 0 ? "OK" : `FAIL(${c.exitCode})`} ${c.command}`;
-    });
-    parts.push("Commands (last run): " + line.join(" | "));
-    for (const c of cmds) {
-      if (c.status === "ran" && c.exitCode !== 0 && c.exitCode !== null) parts.push(`  ${c.command} tail:\n${lastLines(c.output, 8)}`);
-    }
-  }
+  const cmds = latestCommands(task).filter((c) => c.status !== "denied").slice(-8);
+  const cmdLine = (withErrors: boolean) => "Commands (last run): " + cmds.map((c) => {
+    if (c.status === "timeout") return `TIMEOUT ${c.command}`;
+    if (c.exitCode === 0 || c.exitCode === null) return `OK ${c.command}`;
+    const err = withErrors ? errorLine(c.output) : "";
+    return `FAIL(${c.exitCode}) ${c.command}${err ? ` → ${err}` : ""}`;
+  }).join(" | ");
+  const cmdIndex = cmds.length ? parts.push(cmdLine(true)) - 1 : -1;
 
   const pending = task.pendingIds.map((id) => approvals.get(id)).filter((a) => a !== undefined);
   if (pending.length) {
@@ -51,17 +114,24 @@ export function compactReport(task: TaskRecord, approvals: ApprovalStore, maxCha
   parts.push(`DeepSeek usage: ${task.usage.summary()}`);
   if (detail === "brief") parts.push(`More: deepseek_get_report task_id=${task.id} section=summary|files|diff|commands|trace`);
 
-  const header = `DeepSeek task ${task.id} [${task.type}, ${task.model}${task.readOnly ? ", read-only" : ""}] ${STATUS[task.status]} after ${task.steps} steps`;
-  const errorLine = task.error ? `Error: ${task.error}` : "";
-  const tail = parts.join("\n");
+  const header = `DeepSeek task ${task.id} [${task.type}, ${task.model}${task.readOnly ? ", read-only" : ""}] ${statusText(task)} after ${task.steps} steps`;
+  const errorText = task.error ? `Error: ${task.error}` : "";
 
   if (detail === "full") {
     const diffs = changes.map((c) => fileDiff(task, c.rel)).join("\n");
-    return [header, errorLine, task.finalText, tail, diffs ? truncate(diffs, 40_000) : ""].filter(Boolean).join("\n\n");
+    return [header, errorText, task.finalText, parts.join("\n"), diffs ? truncate(diffs, 40_000) : ""].filter(Boolean).join("\n\n");
   }
-  const budget = Math.max(400, maxChars - header.length - errorLine.length - tail.length);
-  const summary = task.finalText ? truncate(task.finalText, budget) : task.error ? "" : "(no summary)";
-  return [header, errorLine, summary, tail].filter(Boolean).join("\n\n");
+
+  const total = FINDINGS_TYPES.has(task.type) ? maxChars * 2 : maxChars;
+  const summary = task.finalText || (task.error ? "" : "(no summary)");
+  // Trim the command log before touching the summary.
+  if (cmdIndex >= 0 && header.length + errorText.length + summary.length + parts.join("\n").length > total) {
+    parts[cmdIndex] = cmdLine(false);
+  }
+  const tail = parts.join("\n");
+  const budget = Math.max(600, total - header.length - errorText.length - tail.length);
+  const more = `full text: deepseek_get_report task_id=${task.id} section=summary`;
+  return [header, errorText, cutSummary(summary, budget, more), tail].filter(Boolean).join("\n\n");
 }
 
 export const REPORT_SECTIONS = ["summary", "files", "diff", "commands", "trace"] as const;
@@ -82,7 +152,7 @@ export function reportSection(task: TaskRecord, section: ReportSection, filePath
     }
     case "commands":
       return task.commands.length
-        ? truncate(task.commands.map((c) => `$ ${c.command}  [${c.status}${c.exitCode !== null ? `, exit ${c.exitCode}` : ""}]\n${truncate(c.output, 6000)}`).join("\n\n"), 60_000)
+        ? truncate(task.commands.map((c) => `$ ${c.command}  [${c.status}${c.exitCode !== null ? `, exit ${c.exitCode}` : ""}]\n${truncate(c.output, 4000)}`).join("\n\n"), 60_000)
         : "No commands were run.";
     case "trace": {
       const lines: string[] = [];

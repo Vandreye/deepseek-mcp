@@ -8,9 +8,11 @@ export const IGNORED_DIRS = new Set([
   "node_modules", ".git", WORKSPACE_DIR_NAME, ".venv", "venv", "__pycache__", ".next", ".turbo", ".cache",
 ]);
 
-const MAX_READ_CHARS = 120_000;
+const MAX_READ_CHARS = 60_000;
+/** Lines returned when no limit is given. Big files should be read in ranges. */
+export const DEFAULT_READ_LINES = 400;
 
-export function readFile(task: TaskRecord, p: string, offset = 1, limit = 2000): string {
+export function readFile(task: TaskRecord, p: string, offset = 1, limit = DEFAULT_READ_LINES): string {
   const { abs, rel } = resolveSafe(task.workspace, p, "read");
   const st = statOrThrow(abs, rel);
   if (st.isDirectory()) throw new Error(`${rel} is a folder; use list_dir.`);
@@ -29,7 +31,9 @@ export function readFile(task: TaskRecord, p: string, offset = 1, limit = 2000):
       return out;
     }
   }
-  if (end < lines.length) out += `…[${lines.length - end} more lines; use offset=${end + 1}]\n`;
+  if (end < lines.length) {
+    out += `…[file has ${lines.length} lines; showed ${start}-${end}. Prefer grep to find what you need, then read_file with offset/limit. Next: offset=${end + 1}]\n`;
+  }
   return out || "(empty file)";
 }
 

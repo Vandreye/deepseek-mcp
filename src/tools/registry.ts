@@ -7,7 +7,7 @@ import { resolveSafe } from "../safety/paths.js";
 import type { TaskRecord } from "../tasks.js";
 import { truncate } from "../tasks.js";
 import { runShell } from "./command.js";
-import { editFile, listDir, readFile, recordOriginal, writeFile } from "./fs.js";
+import { DEFAULT_READ_LINES, editFile, listDir, readFile, recordOriginal, writeFile } from "./fs.js";
 import { globFiles, grep } from "./search.js";
 
 export interface ToolContext {
@@ -29,10 +29,10 @@ const int = (description: string) => ({ type: "integer", description });
 const bool = (description: string) => ({ type: "boolean", description });
 
 const READ_TOOLS: ToolDef[] = [
-  fn("read_file", "Read a text file. Returns numbered lines.", {
+  fn("read_file", `Read a text file, or a line range of it. Returns numbered lines. Large files: grep first, then read only the range you need.`, {
     path: str("Workspace-relative path"),
     offset: int("First line to read (1-based, default 1)"),
-    limit: int("Max lines (default 2000)"),
+    limit: int(`Max lines (default ${DEFAULT_READ_LINES})`),
   }, ["path"]),
   fn("list_dir", "List a folder as a tree (skips node_modules, .git, etc.).", {
     path: str("Folder, default '.'"),
@@ -101,7 +101,7 @@ async function dispatch(ctx: ToolContext, name: string, a: Record<string, any>):
   const t = ctx.task;
   switch (name) {
     case "read_file":
-      return readFile(t, a.path, a.offset, a.limit);
+      return readFile(t, a.path, a.offset ?? undefined, a.limit ?? undefined);
     case "list_dir":
       return listDir(t, a.path ?? ".", a.depth ?? 2);
     case "glob":

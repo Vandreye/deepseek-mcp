@@ -30,6 +30,8 @@ export interface TaskRecord {
   status: "running" | "done" | "step_limit" | "token_limit" | "error";
   error?: string;
   steps: number;
+  /** Limits of the latest run, and how far it got (for the report). */
+  run?: { maxSteps: number; steps: number; maxTokens: number; inputTokens: number };
   usage: UsageTotals;
   created: Date;
 }

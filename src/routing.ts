@@ -94,3 +94,56 @@ export function checkRoute(table: RoutingTable, type: TaskType, userOverride: bo
   }
   return `Routing sends "${type}" tasks to Claude, not DeepSeek. Do it yourself, unless the user explicitly asked for DeepSeek (then set user_override: true).`;
 }
+
+// ---- Default DeepSeek model per task type ----
+
+export const MODEL_KEYS = ["flash", "pro"] as const;
+export type ModelChoice = (typeof MODEL_KEYS)[number];
+export type ModelTable = Partial<Record<TaskType | "default", ModelChoice>>;
+
+export const MODELS_FILE = "models.json";
+
+export function userModelsPath(homeDir: string): string {
+  return path.join(homeDir, MODELS_FILE);
+}
+
+export function projectModelsPath(workspace: string): string {
+  return path.join(workspace, WORKSPACE_DIR_NAME, MODELS_FILE);
+}
+
+function readModels(file: string): ModelTable {
+  try {
+    const raw = JSON.parse(fs.readFileSync(file, "utf8"));
+    const out: ModelTable = {};
+    for (const [key, val] of Object.entries(raw ?? {})) {
+      if ((key === "default" || (TASK_TYPES as readonly string[]).includes(key)) && (MODEL_KEYS as readonly string[]).includes(val as string)) {
+        out[key as TaskType] = val as ModelChoice;
+      }
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+/** User file, then project file (most specific wins). Nothing set means flash. */
+export function loadModels(workspace: string, homeDir: string): ModelTable {
+  return { ...readModels(userModelsPath(homeDir)), ...readModels(projectModelsPath(workspace)) };
+}
+
+export function modelFor(table: ModelTable, type: TaskType): ModelChoice {
+  return table[type] ?? table.default ?? "flash";
+}
+
+export function saveModels(scope: "user" | "project", changes: ModelTable, workspace: string, homeDir: string): string {
+  const file = scope === "user" ? userModelsPath(homeDir) : projectModelsPath(workspace);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, JSON.stringify({ ...readModels(file), ...changes }, null, 2) + "\n");
+  return file;
+}
+
+/** e.g. "review→pro, other→flash". */
+export function describeModels(table: ModelTable): string {
+  const parts = TASK_TYPES.filter((t) => table[t]).map((t) => `${t}→${table[t]}`);
+  return [...parts, `other→${table.default ?? "flash"}`].join(", ");
+}

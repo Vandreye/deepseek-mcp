@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import type { TaskType } from "./routing.js";
 
 /** User-wide settings folder: ~/.deepseek-mcp */
 export const HOME_DIR = process.env.DEEPSEEK_MCP_HOME || path.join(os.homedir(), ".deepseek-mcp");
@@ -22,7 +23,10 @@ export interface Config {
   models: Record<ModelKey, ModelInfo>;
   thinking: "enabled" | "disabled";
   reasoningEffort: string;
+  /** Step limit for task types without their own entry in maxStepsByType. */
   maxSteps: number;
+  /** Bigger limits for exploring task types (reviews and research read a lot). */
+  maxStepsByType: Partial<Record<TaskType, number>>;
   maxTaskTokens: number;
   maxReplyChars: number;
   commandTimeoutMs: number;
@@ -62,6 +66,12 @@ export function loadConfig(): Config {
     thinking: process.env.DEEPSEEK_THINKING === "disabled" ? "disabled" : "enabled",
     reasoningEffort: process.env.DEEPSEEK_REASONING_EFFORT || "high",
     maxSteps: num("DEEPSEEK_MAX_STEPS", 25),
+    maxStepsByType: {
+      review: num("DEEPSEEK_MAX_STEPS_REVIEW", 80),
+      research: num("DEEPSEEK_MAX_STEPS_RESEARCH", 80),
+      debug: num("DEEPSEEK_MAX_STEPS_DEBUG", 50),
+      plan: num("DEEPSEEK_MAX_STEPS_PLAN", 40),
+    },
     maxTaskTokens: num("DEEPSEEK_MAX_TASK_TOKENS", 3_000_000),
     maxReplyChars: num("DEEPSEEK_MAX_REPLY_CHARS", 3200),
     commandTimeoutMs: num("DEEPSEEK_COMMAND_TIMEOUT_SEC", 300) * 1000,
@@ -72,4 +82,9 @@ export function loadConfig(): Config {
     elicitation: process.env.DEEPSEEK_ELICITATION === "off" ? "off" : "auto",
     defaultWorkspace: process.env.DEEPSEEK_WORKSPACE || process.cwd(),
   };
+}
+
+/** Default step limit for a task type. */
+export function stepsFor(cfg: Config, type: TaskType): number {
+  return cfg.maxStepsByType[type] ?? cfg.maxSteps;
 }
