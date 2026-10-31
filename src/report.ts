@@ -91,7 +91,9 @@ export function cutSummary(text: string, budget: number, more: string): string {
 }
 
 /** The short report Claude sees after each task. Kept small on purpose. */
-export function compactReport(task: TaskRecord, approvals: ApprovalStore, maxChars: number, detail: "brief" | "full"): string {
+export function compactReport(
+  task: TaskRecord, approvals: ApprovalStore, maxChars: number, detail: "brief" | "full", withUsage = true,
+): string {
   const parts: string[] = [];
   const changes = fileChanges(task);
   if (changes.length) {
@@ -113,7 +115,7 @@ export function compactReport(task: TaskRecord, approvals: ApprovalStore, maxCha
       "\n  → Show these to the user. approve_actions / reject_actions with the ids.");
   }
 
-  parts.push(`DeepSeek usage: ${task.usage.summary()}`);
+  if (withUsage) parts.push(`DeepSeek usage: ${task.usage.summary()}`);
   // The pointer costs Claude tokens and invites an extra call, so add it only when there is more to get.
   if (detail === "brief" && (changes.length || cmds.some((c) => c.exitCode !== 0 && c.exitCode !== null))) {
     parts.push(`More: deepseek_get_report task_id=${task.id} section=files|diff|commands`);
@@ -147,7 +149,7 @@ export function mergedReport(areas: string[], list: TaskRecord[], approvals: App
   const parts = list.map((t, i) => {
     total.merge(t.usage);
     return `## Area: ${areas[i]}
-${compactReport(t, approvals, perArea, "brief")}`;
+${compactReport(t, approvals, perArea, "brief", false)}`; // only the total usage is shown
   });
   const ids = list.map((t) => t.id).join(", ");
   const done = list.filter((t) => t.status === "done").length;
@@ -171,8 +173,19 @@ export function reportSection(task: TaskRecord, section: ReportSection, filePath
     }
     case "diff": {
       if (filePath) return truncate(fileDiff(task, filePath.replace(/\\/g, "/").replace(/^\.\//, "")), 30_000);
-      const all = fileChanges(task).map((c) => fileDiff(task, c.rel)).join("\n");
-      return truncate(all || "No file changes.", 30_000) + (all.length > 30_000 ? "\n(Ask for one file with path=… to see the rest.)" : "");
+      // Build diffs only until the cap is reached; list the files left out.
+      const changes = fileChanges(task);
+      if (!changes.length) return "No file changes.";
+      let all = "";
+      let shown = 0;
+      for (const c of changes) {
+        if (all.length >= 30_000) break;
+        all += fileDiff(task, c.rel) + "\n";
+        shown++;
+      }
+      const rest = changes.slice(shown).map((c) => c.rel);
+      return truncate(all, 30_000) +
+        (all.length > 30_000 || rest.length ? `\n(Ask for one file with path=… to see the rest${rest.length ? `: ${rest.join(", ")}` : ""}.)` : "");
     }
     case "commands":
       return task.commands.length

@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { startFanOut } from "../src/agent.js";
 import { ApprovalStore } from "../src/approvals.js";
 import { retryAfter, type ChatFn } from "../src/deepseek.js";
-import { parseCommand, toCommandString } from "../src/safety/commands.js";
+import { classifyCommand, parseCommand, toCommandString } from "../src/safety/commands.js";
 import { TaskStore } from "../src/tasks.js";
 import { tempWorkspace, testConfig } from "./helpers.js";
 
@@ -28,5 +28,16 @@ describe("review fixes", () => {
     const now = Date.parse("Sun, 01 Nov 2026 00:00:00 GMT");
     expect(retryAfter("Sun, 01 Nov 2026 00:00:05 GMT", now)).toBe(5000);
     expect(retryAfter("nonsense")).toBe(0);
+  });
+
+  it("sends allowed tools with file-writing flags for approval", () => {
+    const cls = (c: string) => { const p = parseCommand(c); return p.ok ? classifyCommand(p.argv) : "bad"; };
+    for (const c of ["npx eslint --fix .", "npx prettier --check --write .", "ruff check --fix .", "npx tsc --build --clean",
+      "npx vitest -u", "npx jest --updateSnapshot", "cargo clippy --fix", "npx eslint . -o out.txt", "npx eslint . --output-file=o"]) {
+      expect(cls(c), c).toBe("approve");
+    }
+    for (const c of ["npx eslint .", "npx eslint --fix-dry-run .", "npx tsc --noEmit", "npm test", "ruff check ."]) {
+      expect(cls(c), c).toBe("allow");
+    }
   });
 });

@@ -21,7 +21,7 @@
     "inspect": "npx @modelcontextprotocol/inspector node dist/index.js"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=20.3"
   },
   "license": "MIT",
   "dependencies": {

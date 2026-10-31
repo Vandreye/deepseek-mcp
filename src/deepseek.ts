@@ -70,7 +70,8 @@ export function createDeepSeekChat(cfg: Config): ChatFn {
       stream: false,
       thinking: { type: thinking },
     };
-    if (thinking === "enabled") body.reasoning_effort = req.reasoning_effort ?? "low";
+    // DeepSeek has low, high and max; it treats medium as high, so send that directly.
+    if (thinking === "enabled") body.reasoning_effort = req.reasoning_effort === "medium" ? "high" : (req.reasoning_effort ?? "low");
     if (req.tools?.length) {
       body.tools = req.tools;
       body.tool_choice = req.tool_choice ?? "auto";
@@ -83,7 +84,8 @@ export function createDeepSeekChat(cfg: Config): ChatFn {
       if (attempt > 0) {
         // Jitter spreads out parallel areas that hit a rate limit at the same moment.
         const backoff = Math.min(30_000, 1000 * 2 ** attempt) * (0.5 + Math.random() / 2);
-        await sleep(Math.min(60_000, Math.max(backoff, retryAfterMs)), signal);
+        // Honour a server-requested wait up to 5 minutes; our own backoff stays under 30s.
+        await sleep(Math.min(300_000, Math.max(backoff, retryAfterMs)), signal);
         retryAfterMs = 0;
       }
       try {

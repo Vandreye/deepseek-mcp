@@ -160,9 +160,18 @@ server.registerTool(
       let context = "";
       for (const f of a.files ?? []) {
         const s = resolveSafe(workspace, f, "read");
-        const raw = fs.readFileSync(s.abs, "utf8");
-        const body = raw.length > ASK_FILE_CHARS
-          ? `${raw.slice(0, ASK_FILE_CHARS)}\n…[${raw.length - ASK_FILE_CHARS} chars cut; grep for the rest or use deepseek_task]…`
+        // Read only the start of the file; a huge file must not be loaded whole.
+        const size = fs.statSync(s.abs).size;
+        const fd = fs.openSync(s.abs, "r");
+        const buf = Buffer.alloc(Math.min(size, ASK_FILE_CHARS * 4));
+        try {
+          fs.readSync(fd, buf, 0, buf.length, 0);
+        } finally {
+          fs.closeSync(fd);
+        }
+        const raw = buf.toString("utf8");
+        const body = raw.length > ASK_FILE_CHARS || size > buf.length
+          ? `${raw.slice(0, ASK_FILE_CHARS)}\n…[rest of ${size} bytes cut; grep for the rest or use deepseek_task]…`
           : raw;
         context += `\n\n--- ${s.rel} ---\n${body}`;
         if (context.length > ASK_CONTEXT_CHARS) {
@@ -262,8 +271,9 @@ server.registerTool(
     inputSchema: { ids: z.array(z.string()).min(1) },
   },
   async (a) => {
-    const items = a.ids.map((id) => approvals.get(id));
-    const missing = a.ids.filter((_, i) => !items[i]);
+    const ids = [...new Set(a.ids)]; // the same id twice must not run twice
+    const items = ids.map((id) => approvals.get(id));
+    const missing = ids.filter((_, i) => !items[i]);
     if (missing.length) return text(`Unknown approval id(s): ${missing.join(", ")}. See list_pending_approvals.`, true);
     const ask = askUser();
     if (ask) {

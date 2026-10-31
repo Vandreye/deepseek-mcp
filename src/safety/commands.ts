@@ -76,6 +76,14 @@ export function isDeletion(argv: string[]): boolean {
   return false;
 }
 
+const WRITE_FLAGS = new Set(["--write", "-w", "--clean", "-u", "--update", "--updateSnapshot", "--unsafe-fixes"]);
+
+/** Flags that make a test/lint/build tool change source files. */
+function writesFiles(arg: string): boolean {
+  const flag = arg.split("=")[0];
+  return WRITE_FLAGS.has(flag) || (flag.startsWith("--fix") && flag !== "--fix-dry-run");
+}
+
 function matches(argv: string[], prefix: Matcher[]): boolean {
   if (argv.length < prefix.length) return false;
   return prefix.every((m, i) => {
@@ -92,6 +100,9 @@ export function classifyCommand(argv: string[], extraAllow: string[][] = []): "a
   if (norm(argv[0]) === "git" && argv[1] === "branch") {
     return argv.slice(2).every((a) => GIT_BRANCH_FLAGS.has(a)) ? "allow" : "approve";
   }
+  // Allowed tools that rewrite or delete files with a flag (eslint --fix, prettier --write, vitest -u, …).
+  if (argv.slice(1).some(writesFiles)) return "approve";
+  if (["eslint", "npx"].includes(norm(argv[0])) && argv.some((a) => a === "-o" || a.startsWith("--output-file"))) return "approve";
   if (ALLOW.some((p) => matches(argv, p))) return "allow";
   if (extraAllow.some((p) => matches(argv, p))) return "allow";
   return "approve";
@@ -100,6 +111,8 @@ export function classifyCommand(argv: string[], extraAllow: string[][] = []): "a
 /** Rebuild a safe command string from parsed words, quoting where needed. */
 export function toCommandString(argv: string[]): string {
   // $ and ` are refused by parseCommand, so \" is a plain quote for both sh and Windows programs.
+  // On Windows, cmd.exe passes \" through untouched (also via npm.cmd's %*), and the program's
+  // argv parser reads it as a quote; cmd's own quote tracking only matters for & | < > etc., which are refused.
   // Backslashes before a quote (or the closing quote) are doubled so they stay literal.
   const quote = (a: string) => `"${a.replace(/(\\*)"/g, '$1$1\\"').replace(/(\\+)$/, "$1$1")}"`;
   return argv.map((a) => (a === "" || /[\s"']/.test(a) ? quote(a) : a)).join(" ");
