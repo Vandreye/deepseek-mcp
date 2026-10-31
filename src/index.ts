@@ -87,9 +87,9 @@ const taskTool = server.registerTool(
       detail: z.enum(["brief", "full"]).default("brief"),
       max_steps: z.number().int().min(1).max(200).optional(),
       max_tokens: z.number().int().min(50_000).max(50_000_000).optional()
-        .describe("Input-token budget for this call (cached tokens count at ~10%). Default 3M"),
+        .describe("Input-token budget for this call, shared by all areas (cached counts ~10%). Default 3M per task/area"),
       areas: z.array(z.string().min(1)).min(2).max(8).optional()
-        .describe("Split into parallel sub-tasks, one per area (e.g. [\"auth\",\"feeds\"]), each with its own step/token budget; one merged report"),
+        .describe("Split into parallel sub-tasks, one per area (e.g. [\"auth\",\"feeds\"]), one merged report"),
       user_override: z.boolean().default(false).describe("User explicitly asked for DeepSeek"),
     },
   },
@@ -199,7 +199,7 @@ server.registerTool(
     inputSchema: {
       set: z.record(z.string(), z.enum(ROUTES)).optional().describe('e.g. {"code":"deepseek","review":"claude"}'),
       models: z.record(z.string(), z.enum(MODEL_KEYS)).optional().describe('Default DeepSeek model per type, e.g. {"review":"pro","default":"flash"}'),
-      effort: z.record(z.string(), z.enum([...EFFORTS, "auto"])).optional().describe('Thinking effort per type: off | low | medium | high | auto (built-in default), e.g. {"review":"high"}'),
+      effort: z.record(z.string(), z.enum([...EFFORTS, "auto"])).optional().describe('Thinking effort per type: off | low | medium (=high) | high | max | auto (built-in default), e.g. {"review":"high"}'),
       scope: z.enum(["user", "project"]).default("user").describe("user = all projects; project = this workspace only"),
       workspace: z.string().optional(),
     },

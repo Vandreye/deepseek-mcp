@@ -78,8 +78,14 @@ export function createDeepSeekChat(cfg: Config): ChatFn {
     if (req.max_tokens) body.max_tokens = req.max_tokens;
 
     let lastErr: unknown;
+    let retryAfterMs = 0;
     for (let attempt = 0; attempt < 5; attempt++) {
-      if (attempt > 0) await sleep(Math.min(30_000, 1000 * 2 ** attempt), signal);
+      if (attempt > 0) {
+        // Jitter spreads out parallel areas that hit a rate limit at the same moment.
+        const backoff = Math.min(30_000, 1000 * 2 ** attempt) * (0.5 + Math.random() / 2);
+        await sleep(Math.min(60_000, Math.max(backoff, retryAfterMs)), signal);
+        retryAfterMs = 0;
+      }
       try {
         const timeout = AbortSignal.timeout(15 * 60_000);
         const res = await fetch(`${cfg.baseUrl}/chat/completions`, {
@@ -93,11 +99,18 @@ export function createDeepSeekChat(cfg: Config): ChatFn {
           const err = new DeepSeekError(`DeepSeek API ${res.status}: ${text.slice(0, 500)}`, res.status);
           if (RETRYABLE.has(res.status)) {
             lastErr = err;
+            retryAfterMs = (Number(res.headers.get("retry-after")) || 0) * 1000;
             continue;
           }
           throw err;
         }
-        const json = JSON.parse(text);
+        // A 200 is already billed; retrying a body we cannot parse would pay for it again.
+        let json: any;
+        try {
+          json = JSON.parse(text);
+        } catch {
+          throw new DeepSeekError(`Unreadable DeepSeek response: ${text.slice(0, 300)}`);
+        }
         const choice = json.choices?.[0];
         if (!choice?.message) throw new DeepSeekError(`Unexpected DeepSeek response: ${text.slice(0, 300)}`);
         const m = choice.message;

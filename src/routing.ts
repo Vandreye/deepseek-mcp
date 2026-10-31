@@ -150,8 +150,11 @@ export function describeModels(table: ModelTable): string {
 
 // ---- Thinking effort per task type (/ds-effort) ----
 
-/** off = no thinking; low/medium/high = thinking at that reasoning_effort; auto = built-in default. */
-export const EFFORTS = ["off", "low", "medium", "high"] as const;
+/**
+ * off = no thinking; low/medium/high/max = thinking at that reasoning_effort; auto = built-in default.
+ * DeepSeek has three real levels (low, high, max) and treats medium as high.
+ */
+export const EFFORTS = ["off", "low", "medium", "high", "max"] as const;
 export type Effort = (typeof EFFORTS)[number];
 export type EffortTable = Partial<Record<TaskType | "default", Effort>>;
 

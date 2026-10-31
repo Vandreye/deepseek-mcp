@@ -5,8 +5,8 @@ const MARK = "[shortened]";
 /**
  * Shorten old tool outputs in place so later steps re-send less. The newest `keepRecent`
  * tool outputs and all of DeepSeek's own messages (where it keeps its file:line notes) stay
- * whole. Only the latest assistant message keeps its reasoning_content; older thinking is
- * dropped, because it is re-sent on every step and is not needed any more.
+ * whole, and so does reasoning_content: DeepSeek requires all of it to be sent back when
+ * tools are in use (omitting it is a 400 error).
  * Returns how many characters were removed.
  */
 export function compactHistory(messages: ChatMessage[], keepRecent = 8, minChars = 400): number {
@@ -25,13 +25,5 @@ export function compactHistory(messages: ChatMessage[], keepRecent = 8, minChars
     m.content = `${MARK} ${what} → ${text.length} chars. First lines:\n${head}\n(Old output removed to save tokens. Run the tool again if you need it.)`;
     removed += text.length - m.content.length;
   }
-
-  // Drop reasoning from every assistant message except the most recent one.
-  const lastReasoning = messages.findLastIndex((m) => m.role === "assistant" && m.reasoning_content);
-  messages.forEach((m, i) => {
-    if (i === lastReasoning || !m.reasoning_content) return;
-    removed += m.reasoning_content.length;
-    delete m.reasoning_content;
-  });
   return removed;
 }

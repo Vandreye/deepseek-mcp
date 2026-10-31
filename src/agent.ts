@@ -56,11 +56,13 @@ export async function startTask(input: NewTask, deps: AgentDeps): Promise<TaskRe
 }
 
 /**
- * Split one big task into parallel sub-tasks, one per area, each with its own budget.
+ * Split one big task into parallel sub-tasks, one per area. Without max_tokens each area gets
+ * the default budget; an explicit max_tokens is the total for the whole call and is shared.
  * Returns the sub-tasks in the order of `areas`.
  */
 export async function startFanOut(input: NewTask, areas: string[], deps: AgentDeps): Promise<TaskRecord[]> {
   const out: TaskRecord[] = new Array(areas.length);
+  const maxTokens = input.maxTokens && Math.max(50_000, Math.floor(input.maxTokens / areas.length));
   let next = 0;
   const worker = async () => {
     while (next < areas.length) {
@@ -74,7 +76,7 @@ export async function startFanOut(input: NewTask, areas: string[], deps: AgentDe
 
 Your area for this run: ${area}
 Other areas are covered by separate runs at the same time. Stay within your area.`;
-      out[i] = await startTask({ ...input, task: text }, sub);
+      out[i] = await startTask({ ...input, task: text, maxTokens }, sub);
     }
   };
   const n = Math.max(1, Math.min(deps.config.fanoutConcurrency, areas.length));
@@ -86,11 +88,23 @@ Other areas are covered by separate runs at the same time. Stay within your area
 export async function continueTask(task: TaskRecord, message: string, deps: AgentDeps, maxSteps?: number, maxTokens?: number): Promise<TaskRecord> {
   const notes = task.notes.splice(0);
   const prefix = notes.length ? `Updates since your last report:\n- ${notes.join("\n- ")}\n\n` : "";
-  task.messages.push({ role: "user", content: prefix + message.trim() });
+  const steps = maxSteps ?? stepsFor(deps.config, task.type);
+  const tokens = maxTokens ?? deps.config.maxTaskTokens;
+  // The system prompt must stay unchanged (it is the cached prefix), so a new budget goes here.
+  const budget = maxSteps || maxTokens ? `\n\n[Budget for this follow-up: about ${steps} tool steps and ${(tokens / 1e6).toFixed(1)}M input tokens.]` : "";
+  task.messages.push({ role: "user", content: prefix + message.trim() + budget });
   task.status = "running";
   task.error = undefined;
-  await runLoop(task, deps, maxSteps ?? stepsFor(deps.config, task.type), maxTokens ?? deps.config.maxTaskTokens);
+  await runLoop(task, deps, steps, tokens);
   return task;
+}
+
+const PARALLEL_TOOLS = new Set(["read_file", "list_dir", "glob", "grep"]);
+
+async function sequential<T>(jobs: (() => Promise<T>)[]): Promise<T[]> {
+  const out: T[] = [];
+  for (const job of jobs) out.push(await job());
+  return out;
 }
 
 async function runLoop(task: TaskRecord, deps: AgentDeps, maxSteps: number, maxTokens: number): Promise<void> {
@@ -146,10 +160,12 @@ async function runLoop(task: TaskRecord, deps: AgentDeps, maxSteps: number, maxT
         log({ event: "done", steps: task.steps, cost: task.usage.cost });
         return;
       }
-      for (const call of calls) {
-        const result = await executeTool(ctx, call.function.name, call.function.arguments);
-        task.messages.push({ role: "tool", tool_call_id: call.id, content: result });
-      }
+      // Reads have no side effects, so a step made only of reads runs them at the same time.
+      const run1 = (c: (typeof calls)[number]) => executeTool(ctx, c.function.name, c.function.arguments);
+      const results = calls.every((c) => PARALLEL_TOOLS.has(c.function.name))
+        ? await Promise.all(calls.map(run1))
+        : await sequential(calls.map((c) => () => run1(c)));
+      calls.forEach((call, i) => task.messages.push({ role: "tool", tool_call_id: call.id, content: results[i] }));
       // The prompt is re-sent every step; once it is big, shorten old tool outputs.
       // Each shortening breaks the cache from that point, so wait until the prompt has grown again.
       if (r.usage.prompt_tokens > Math.max(config.compactTokens, compactedAt + config.compactTokens / 2)) {

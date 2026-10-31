@@ -88,18 +88,16 @@ describe("history compaction", () => {
     expect(compactHistory(messages, 3)).toBe(0); // already shortened
   });
 
-  it("drops reasoning_content from all but the latest assistant message", () => {
+  it("keeps every reasoning_content (DeepSeek returns 400 without it when tools are used)", () => {
     const messages: ChatMessage[] = [
       { role: "system", content: "s" },
       { role: "assistant", content: "a1", reasoning_content: "think-1", tool_calls: [{ id: "c1", type: "function", function: { name: "list_dir", arguments: "{}" } }] },
       { role: "tool", tool_call_id: "c1", content: "small output" },
       { role: "assistant", content: "a2", reasoning_content: "think-22" },
     ];
-    expect(compactHistory(messages, 8)).toBe("think-1".length); // only the old reasoning goes
-    expect(messages[1].reasoning_content).toBeUndefined();
-    expect(messages[1].content).toBe("a1"); // only the reasoning goes
-    expect(messages[3].reasoning_content).toBe("think-22"); // the latest one stays
-    expect(compactHistory(messages, 8)).toBe(0); // nothing left to strip
+    expect(compactHistory(messages, 8)).toBe(0);
+    expect(messages[1].reasoning_content).toBe("think-1");
+    expect(messages[3].reasoning_content).toBe("think-22");
   });
 
   it("runs during a task once the prompt is big", async () => {
@@ -133,5 +131,32 @@ describe("fan-out", () => {
     for (const a of areas) expect(report).toContain(`## Area: ${a}`);
     expect(report).toContain("finding in feeds");
     expect(report).toMatch(/Total DeepSeek usage: 3\.0k in/);
+  });
+
+  it("shares an explicit max_tokens across the areas", async () => {
+    const chat: ChatFn = async () => ({ message: { role: "assistant", content: "ok" }, usage: { prompt_tokens: 10, completion_tokens: 1 }, finishReason: "stop" });
+    const list = await startFanOut(input({ maxTokens: 900_000 }), ["a", "b", "c"], deps(chat));
+    expect(list.map((t) => t.run!.maxTokens)).toEqual([300_000, 300_000, 300_000]);
+  });
+});
+
+describe("tool calls in one step", () => {
+  it("runs reads at the same time and keeps results in call order", async () => {
+    const reads: ChatMessage = {
+      role: "assistant", content: "",
+      tool_calls: ["a", "b", "c"].map((id) => ({ id, type: "function" as const, function: { name: "list_dir", arguments: "{}" } })),
+    };
+    const { chat, requests } = scripted([reads, { role: "assistant", content: "done" }], { prompt_tokens: 10, completion_tokens: 1 });
+    const task = await startTask(input(), deps(chat));
+    expect(task.status).toBe("done");
+    expect(requests[1].messages.filter((m) => m.role === "tool").map((m) => m.tool_call_id)).toEqual(["a", "b", "c"]);
+  });
+});
+
+describe("brief report", () => {
+  it("skips the deepseek_get_report pointer when there is nothing more to get", async () => {
+    const { chat } = scripted([{ role: "assistant", content: "- all good" }], { prompt_tokens: 10, completion_tokens: 1 });
+    const task = await startTask(input(), deps(chat));
+    expect(compactReport(task, new ApprovalStore(), 3200, "brief")).not.toContain("deepseek_get_report");
   });
 });

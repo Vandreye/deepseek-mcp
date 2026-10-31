@@ -1,10 +1,10 @@
 ---
-description: Show or set DeepSeek's thinking effort per task type (off, low, medium, high, auto)
+description: Show or set DeepSeek's thinking effort per task type (off, low, medium, high, max, auto)
 argument-hint: "[show | <level> | <type> <level> ...] [--project]"
 ---
 Use the `deepseek_routing` MCP tool with its `effort` field. Scope is "project" if "--project" is present, else "user".
 
-Levels: off (no thinking, cheapest), low, medium, high (most tokens), auto (built-in default: off for code/tests/docs/question/general, low for the rest).
+Levels: off (no thinking, cheapest), low, medium (DeepSeek treats it as high), high, max (most tokens), auto (built-in default: off for code/tests/docs/question/general, low for the rest).
 Valid types: plan, code, review, bugfix, debug, research, tests, docs, question, general, default.
 
 **With "<type> <level>" pairs** (e.g. "review high plan medium"): set those in one call.
@@ -24,7 +24,7 @@ Valid types: plan, code, review, bugfix, debug, research, tests, docs, question,
    - plan, code, review, bugfix
    - debug, research, tests, docs
    - question, general
-   Each question: "Thinking effort for <type> tasks?", header = the type, options "Auto", "Off", "Low", "High" (medium can be typed via Other). Put the current choice first and add " (current)" to its label.
+   Each question: "Thinking effort for <type> tasks?", header = the type, options "Auto", "Off", "Low", "High" (medium or max can be typed via Other). Put the current choice first and add " (current)" to its label.
 4. Call `deepseek_routing` once with all choices in `effort` (skip if nothing changed). For "Auto", "Low everywhere" or "High everywhere", set `default` and every type to that level (auto/low/high).
 
 Reply with the resulting effort line only.

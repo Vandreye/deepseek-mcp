@@ -114,7 +114,10 @@ export function compactReport(task: TaskRecord, approvals: ApprovalStore, maxCha
   }
 
   parts.push(`DeepSeek usage: ${task.usage.summary()}`);
-  if (detail === "brief") parts.push(`More: deepseek_get_report task_id=${task.id} section=summary|files|diff|commands|trace`);
+  // The pointer costs Claude tokens and invites an extra call, so add it only when there is more to get.
+  if (detail === "brief" && (changes.length || cmds.some((c) => c.exitCode !== 0 && c.exitCode !== null))) {
+    parts.push(`More: deepseek_get_report task_id=${task.id} section=files|diff|commands`);
+  }
 
   const shortened = task.run?.compactions ? `, history shortened ${task.run.compactions}×` : "";
   const header = `DeepSeek task ${task.id} [${task.type}, ${task.model}${task.readOnly ? ", read-only" : ""}] ${statusText(task)} after ${task.steps} steps${shortened}`;
@@ -122,7 +125,7 @@ export function compactReport(task: TaskRecord, approvals: ApprovalStore, maxCha
 
   if (detail === "full") {
     const diffs = changes.map((c) => fileDiff(task, c.rel)).join("\n");
-    return [header, errorText, task.finalText, parts.join("\n"), diffs ? truncate(diffs, 40_000) : ""].filter(Boolean).join("\n\n");
+    return [header, errorText, task.finalText, parts.join("\n"), diffs ? truncate(diffs, 20_000) : ""].filter(Boolean).join("\n\n");
   }
 
   const total = FINDINGS_TYPES.has(task.type) ? maxChars * 2 : maxChars;
@@ -169,7 +172,7 @@ export function reportSection(task: TaskRecord, section: ReportSection, filePath
     case "diff": {
       if (filePath) return fileDiff(task, filePath.replace(/\\/g, "/").replace(/^\.\//, ""));
       const all = fileChanges(task).map((c) => fileDiff(task, c.rel)).join("\n");
-      return truncate(all || "No file changes.", 60_000);
+      return truncate(all || "No file changes.", 30_000) + (all.length > 30_000 ? "\n(Ask for one file with path=… to see the rest.)" : "");
     }
     case "commands":
       return task.commands.length
