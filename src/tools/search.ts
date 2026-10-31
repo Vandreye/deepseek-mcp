@@ -27,6 +27,21 @@ export async function globFiles(task: TaskRecord, pattern: string, max = 500): P
 
 const MAX_TEST_CHARS = 10_000;
 
+/**
+ * DeepSeek often writes PCRE/Python-style leading flags like "(?i)foo", which JavaScript rejects.
+ * Turn leading i/s/m flag groups into RegExp flags (other flags would change nothing per line).
+ */
+export function jsRegex(pattern: string, ignoreCase?: boolean): { source: string; flags: string } {
+  let source = pattern;
+  const flags = new Set(ignoreCase ? ["i"] : []);
+  let m: RegExpExecArray | null;
+  while ((m = /^\(\?([imsx]+)\)/.exec(source))) {
+    for (const f of m[1]) if (f === "i" || f === "s" || f === "m") flags.add(f);
+    source = source.slice(m[0].length);
+  }
+  return { source, flags: [...flags].join("") };
+}
+
 export interface GrepArgs {
   pattern: string;
   glob?: string;
@@ -38,7 +53,8 @@ export interface GrepArgs {
 export async function grep(task: TaskRecord, a: GrepArgs): Promise<string> {
   let re: RegExp;
   try {
-    re = new RegExp(a.pattern, a.ignore_case ? "i" : "");
+    const { source, flags } = jsRegex(a.pattern, a.ignore_case);
+    re = new RegExp(source, flags);
   } catch (e) {
     throw new Error(`Invalid regex: ${(e as Error).message}`);
   }

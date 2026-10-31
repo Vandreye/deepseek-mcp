@@ -166,3 +166,17 @@ describe("smaller fixes", () => {
     expect(out).toMatch(/a\.ts/);
   });
 });
+
+describe("grep patterns from other regex dialects", () => {
+  it("turns leading (?i) style flags into JavaScript flags", async () => {
+    const { jsRegex } = await import("../src/tools/search.js");
+    expect(jsRegex("(?i)upload|size")).toEqual({ source: "upload|size", flags: "i" });
+    expect(jsRegex("(?is)a.b", false)).toEqual({ source: "a.b", flags: "is" });
+    expect(jsRegex("(?x)a", true)).toEqual({ source: "a", flags: "i" });
+    expect(jsRegex("plain(?i)")).toEqual({ source: "plain(?i)", flags: "" }); // only leading groups
+    const ws = tempWorkspace();
+    fs.writeFileSync(path.join(ws, "a.js"), "const MAX_UPLOAD = 5;\n");
+    const out = await executeTool(makeCtx(ws, true), "grep", JSON.stringify({ pattern: "(?i)max_upload" }));
+    expect(out).toMatch(/a\.js:1:/);
+  });
+});
