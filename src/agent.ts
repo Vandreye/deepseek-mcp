@@ -1,6 +1,7 @@
 import type { ApprovalStore, AskUser } from "./approvals.js";
 import { stepsFor, type Config, type ModelKey } from "./config.js";
 import type { ChatFn } from "./deepseek.js";
+import { compactHistory } from "./compact.js";
 import { auditLogger, ensureWorkspaceDir } from "./log.js";
 import { systemPrompt, userPrompt } from "./prompts.js";
 import type { TaskType } from "./routing.js";
@@ -26,6 +27,8 @@ export interface NewTask {
   files?: string[];
   contextGlobs?: string[];
   maxSteps?: number;
+  /** Input-token budget for this run (weighted; default config.maxTaskTokens). */
+  maxTokens?: number;
 }
 
 export async function startTask(input: NewTask, deps: AgentDeps): Promise<TaskRecord> {
@@ -33,51 +36,87 @@ export async function startTask(input: NewTask, deps: AgentDeps): Promise<TaskRe
     type: input.type, model: input.model, workspace: input.workspace, readOnly: input.readOnly,
   });
   ensureWorkspaceDir(input.workspace);
+  const maxSteps = input.maxSteps ?? stepsFor(deps.config, input.type);
+  const maxTokens = input.maxTokens ?? deps.config.maxTaskTokens;
   task.messages.push(
     {
       role: "system",
       content: systemPrompt(input.type, input.workspace, input.readOnly, {
-        maxSteps: input.maxSteps ?? stepsFor(deps.config, input.type),
-        maxTokens: deps.config.maxTaskTokens,
+        maxSteps,
+        maxTokens,
+        cacheWeight: deps.config.cacheWeight,
       }),
     },
     { role: "user", content: userPrompt(input.task, input.files, input.contextGlobs) },
   );
-  await runLoop(task, deps, input.maxSteps ?? stepsFor(deps.config, input.type));
+  await runLoop(task, deps, maxSteps, maxTokens);
   return task;
 }
 
+/**
+ * Split one big task into parallel sub-tasks, one per area, each with its own budget.
+ * Returns the sub-tasks in the order of `areas`.
+ */
+export async function startFanOut(input: NewTask, areas: string[], deps: AgentDeps): Promise<TaskRecord[]> {
+  const out: TaskRecord[] = new Array(areas.length);
+  let next = 0;
+  const worker = async () => {
+    while (next < areas.length) {
+      const i = next++;
+      const area = areas[i];
+      const sub: AgentDeps = {
+        ...deps,
+        onProgress: deps.onProgress && ((step, max, msg) => deps.onProgress!(step, max, `[${area}] ${msg}`)),
+      };
+      const text = `${input.task.trim()}
+
+Your area for this run: ${area}
+Other areas are covered by separate runs at the same time. Stay within your area.`;
+      out[i] = await startTask({ ...input, task: text }, sub);
+    }
+  };
+  const n = Math.max(1, Math.min(deps.config.fanoutConcurrency, areas.length));
+  await Promise.all(Array.from({ length: n }, worker));
+  return out;
+}
+
 /** Send a follow-up to an earlier task. Its history (and DeepSeek's cache) is reused. */
-export async function continueTask(task: TaskRecord, message: string, deps: AgentDeps, maxSteps?: number): Promise<TaskRecord> {
+export async function continueTask(task: TaskRecord, message: string, deps: AgentDeps, maxSteps?: number, maxTokens?: number): Promise<TaskRecord> {
   const notes = task.notes.splice(0);
   const prefix = notes.length ? `Updates since your last report:\n- ${notes.join("\n- ")}\n\n` : "";
   task.messages.push({ role: "user", content: prefix + message.trim() });
   task.status = "running";
   task.error = undefined;
-  await runLoop(task, deps, maxSteps ?? stepsFor(deps.config, task.type));
+  await runLoop(task, deps, maxSteps ?? stepsFor(deps.config, task.type), maxTokens ?? deps.config.maxTaskTokens);
   return task;
 }
 
-async function runLoop(task: TaskRecord, deps: AgentDeps, maxSteps: number): Promise<void> {
+async function runLoop(task: TaskRecord, deps: AgentDeps, maxSteps: number, maxTokens: number): Promise<void> {
   const { chat, config } = deps;
   const model = config.models[task.model];
   const tools = toolDefs(task.readOnly);
   const log = auditLogger(task.workspace, task.id);
   const ctx = { task, config, approvals: deps.approvals, askUser: deps.askUser, log };
-  const inputAtStart = task.usage.input;
+  const hitAtStart = task.usage.cacheHit;
+  const missAtStart = task.usage.cacheMiss;
   const stepsAtStart = task.steps;
-  const run = { maxSteps, steps: 0, maxTokens: config.maxTaskTokens, inputTokens: 0 };
+  const run = { maxSteps, steps: 0, maxTokens, inputTokens: 0, rawInputTokens: 0, compactions: 0 };
   task.run = run;
+  // Cached input costs about a tenth, so it counts for less against the budget.
   const used = () => {
+    const hit = task.usage.cacheHit - hitAtStart;
+    const miss = task.usage.cacheMiss - missAtStart;
     run.steps = task.steps - stepsAtStart;
-    run.inputTokens = task.usage.input - inputAtStart;
+    run.rawInputTokens = hit + miss;
+    run.inputTokens = Math.round(miss + hit * config.cacheWeight);
   };
   let warned = false;
+  let compactedAt = 0; // estimated prompt tokens right after the last shortening
 
   log({ event: "start", type: task.type, model: model.id, readOnly: task.readOnly });
   try {
     for (let step = 1; step <= maxSteps; step++) {
-      if (task.usage.input - inputAtStart > config.maxTaskTokens) {
+      if (run.inputTokens > maxTokens) {
         task.status = "token_limit";
         break;
       }
@@ -98,9 +137,19 @@ async function runLoop(task: TaskRecord, deps: AgentDeps, maxSteps: number): Pro
         const result = await executeTool(ctx, call.function.name, call.function.arguments);
         task.messages.push({ role: "tool", tool_call_id: call.id, content: result });
       }
+      // The prompt is re-sent every step; once it is big, shorten old tool outputs.
+      // Each shortening breaks the cache from that point, so wait until the prompt has grown again.
+      if (r.usage.prompt_tokens > Math.max(config.compactTokens, compactedAt + config.compactTokens / 2)) {
+        const removed = compactHistory(task.messages);
+        if (removed > 0) {
+          compactedAt = r.usage.prompt_tokens - Math.round(removed / 4);
+          run.compactions++;
+          log({ event: "compact", promptTokens: r.usage.prompt_tokens, removedChars: removed });
+        }
+      }
       // Warn once when the budget runs low, so it wraps up instead of stopping mid-area.
       const stepsLeft = maxSteps - step;
-      const tokenShare = run.inputTokens / config.maxTaskTokens;
+      const tokenShare = run.inputTokens / maxTokens;
       if (!warned && stepsLeft > 0 && (stepsLeft <= Math.max(2, Math.ceil(maxSteps * 0.2)) || tokenShare >= 0.8)) {
         warned = true;
         const last = task.messages[task.messages.length - 1];

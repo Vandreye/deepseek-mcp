@@ -3,11 +3,11 @@ import fs from "node:fs";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-import { continueTask, startTask, type AgentDeps } from "./agent.js";
+import { continueTask, startFanOut, startTask, type AgentDeps } from "./agent.js";
 import { ApprovalStore, describeAction, executeAction, type AskUser } from "./approvals.js";
 import { HOME_DIR, loadConfig, type ModelKey } from "./config.js";
 import { createDeepSeekChat, UsageTotals, type ChatFn } from "./deepseek.js";
-import { compactReport, REPORT_SECTIONS, reportSection } from "./report.js";
+import { compactReport, mergedReport, REPORT_SECTIONS, reportSection } from "./report.js";
 import {
   checkRoute, describeModels, describeRouting, loadModels, loadRouting, MODEL_KEYS, modelFor, projectModelsPath,
   projectRoutingPath, ROUTES, saveModels, saveRouting, TASK_TYPES, userModelsPath, userRoutingPath,
@@ -68,7 +68,7 @@ function taskDescription(): string {
   } catch {
     /* default workspace may be invalid; routing is checked on each call anyway */
   }
-  return `Hand a task to DeepSeek (cheap subagent; reads/writes files, runs tests, works until done). USER ROUTING: ${routing}. Only use for types routed to deepseek, or when the user explicitly asked for DeepSeek (set user_override). "ask" = ask the user first. Default models (user's choice; omit model to use them): ${models}. Give file paths, not contents. Big jobs (e.g. whole-project review): one call per area, then merge. Returns a compact report.`;
+  return `Hand a task to DeepSeek (cheap subagent; reads/writes files, runs tests, works until done). USER ROUTING: ${routing}. Only use for types routed to deepseek, or when the user explicitly asked for DeepSeek (set user_override). "ask" = ask the user first. Default models (user's choice; omit model to use them): ${models}. Give file paths, not contents. Big jobs (e.g. whole-project review): pass areas=[...] to run one sub-task per area in parallel with a merged report. Returns a compact report.`;
 }
 
 const taskTool = server.registerTool(
@@ -86,6 +86,10 @@ const taskTool = server.registerTool(
       read_only: z.boolean().optional().describe("Default true for plan/review/research"),
       detail: z.enum(["brief", "full"]).default("brief"),
       max_steps: z.number().int().min(1).max(200).optional(),
+      max_tokens: z.number().int().min(50_000).max(50_000_000).optional()
+        .describe("Input-token budget for this call (cached tokens count at ~10%). Default 3M"),
+      areas: z.array(z.string().min(1)).min(2).max(8).optional()
+        .describe("Split into parallel sub-tasks, one per area (e.g. [\"auth\",\"feeds\"]), each with its own step/token budget; one merged report"),
       user_override: z.boolean().default(false).describe("User explicitly asked for DeepSeek"),
     },
   },
@@ -97,20 +101,22 @@ const taskTool = server.registerTool(
         if (!prev) return text(`Unknown task_id ${a.task_id} (the server may have restarted). Start a new task.`, true);
         const block = checkRoute(loadRouting(prev.workspace, HOME_DIR), prev.type, a.user_override);
         if (block) return text(block, true);
-        await continueTask(prev, a.task, deps, a.max_steps);
+        await continueTask(prev, a.task, deps, a.max_steps, a.max_tokens);
         return text(compactReport(prev, approvals, config.maxReplyChars, a.detail), prev.status === "error");
       }
       const workspace = workspaceOf(a.workspace);
       const block = checkRoute(loadRouting(workspace, HOME_DIR), a.type, a.user_override);
       if (block) return text(block, true);
       const readOnly = a.read_only ?? ["plan", "review", "research", "question"].includes(a.type);
-      const task = await startTask(
-        {
-          task: a.task, type: a.type, model: (a.model ?? modelFor(loadModels(workspace, HOME_DIR), a.type)) as ModelKey, workspace, readOnly,
-          files: a.files, contextGlobs: a.context_globs, maxSteps: a.max_steps,
-        },
-        deps,
-      );
+      const input = {
+        task: a.task, type: a.type, model: (a.model ?? modelFor(loadModels(workspace, HOME_DIR), a.type)) as ModelKey, workspace, readOnly,
+        files: a.files, contextGlobs: a.context_globs, maxSteps: a.max_steps, maxTokens: a.max_tokens,
+      };
+      if (a.areas?.length) {
+        const list = await startFanOut(input, a.areas, deps);
+        return text(mergedReport(a.areas, list, approvals, config.maxReplyChars), list.every((t) => t.status === "error"));
+      }
+      const task = await startTask(input, deps);
       return text(compactReport(task, approvals, config.maxReplyChars, a.detail), task.status === "error");
     } catch (e) {
       return text(`deepseek_task failed: ${(e as Error).message}`, true);

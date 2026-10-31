@@ -27,7 +27,13 @@ export interface Config {
   maxSteps: number;
   /** Bigger limits for exploring task types (reviews and research read a lot). */
   maxStepsByType: Partial<Record<TaskType, number>>;
+  /** Input-token budget per run. Cached tokens count at cacheWeight (they cost about a tenth). */
   maxTaskTokens: number;
+  cacheWeight: number;
+  /** When a prompt passes this many tokens, old tool outputs are shortened. */
+  compactTokens: number;
+  /** Sub-tasks run at the same time when a task is split into areas. */
+  fanoutConcurrency: number;
   maxReplyChars: number;
   commandTimeoutMs: number;
   extraAllowCommands: string[][];
@@ -73,6 +79,9 @@ export function loadConfig(): Config {
       plan: num("DEEPSEEK_MAX_STEPS_PLAN", 40),
     },
     maxTaskTokens: num("DEEPSEEK_MAX_TASK_TOKENS", 3_000_000),
+    cacheWeight: Math.min(1, num("DEEPSEEK_CACHE_WEIGHT", 0.1)),
+    compactTokens: num("DEEPSEEK_COMPACT_TOKENS", 60_000),
+    fanoutConcurrency: num("DEEPSEEK_FANOUT_CONCURRENCY", 3),
     maxReplyChars: num("DEEPSEEK_MAX_REPLY_CHARS", 3200),
     commandTimeoutMs: num("DEEPSEEK_COMMAND_TIMEOUT_SEC", 300) * 1000,
     extraAllowCommands: (process.env.DEEPSEEK_ALLOW_COMMANDS || "")

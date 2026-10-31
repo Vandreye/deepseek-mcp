@@ -137,6 +137,15 @@ export class UsageTotals {
     this.cost += (hit * model.price.cacheHit + miss * model.price.cacheMiss + u.completion_tokens * model.price.output) / 1e6;
   }
 
+  /** Add another task's totals (for merged reports). */
+  merge(o: UsageTotals): void {
+    this.cacheHit += o.cacheHit;
+    this.cacheMiss += o.cacheMiss;
+    this.output += o.output;
+    this.calls += o.calls;
+    this.cost += o.cost;
+  }
+
   get input(): number {
     return this.cacheHit + this.cacheMiss;
   }

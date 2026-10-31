@@ -2,6 +2,7 @@ import type { ApprovalStore } from "./approvals.js";
 import { describeAction } from "./approvals.js";
 import type { CommandRecord, TaskRecord } from "./tasks.js";
 import { fileChanges, fileDiff, truncate } from "./tasks.js";
+import { UsageTotals } from "./deepseek.js";
 
 const STATUS: Record<TaskRecord["status"], string> = {
   running: "running",
@@ -35,7 +36,8 @@ function statusText(task: TaskRecord): string {
   const r = task.run;
   if (task.status === "step_limit" && r) return `stopped at step limit (${r.steps}/${r.maxSteps} steps)`;
   if (task.status === "token_limit" && r) {
-    return `stopped at token limit (${fmtTokens(r.inputTokens)}/${fmtTokens(r.maxTokens)} input tokens, step ${r.steps}/${r.maxSteps})`;
+    const raw = r.rawInputTokens > r.inputTokens ? `, cached counted lower; ${fmtTokens(r.rawInputTokens)} sent` : "";
+    return `stopped at token limit (${fmtTokens(r.inputTokens)}/${fmtTokens(r.maxTokens)} input tokens${raw}, step ${r.steps}/${r.maxSteps})`;
   }
   return STATUS[task.status];
 }
@@ -114,7 +116,8 @@ export function compactReport(task: TaskRecord, approvals: ApprovalStore, maxCha
   parts.push(`DeepSeek usage: ${task.usage.summary()}`);
   if (detail === "brief") parts.push(`More: deepseek_get_report task_id=${task.id} section=summary|files|diff|commands|trace`);
 
-  const header = `DeepSeek task ${task.id} [${task.type}, ${task.model}${task.readOnly ? ", read-only" : ""}] ${statusText(task)} after ${task.steps} steps`;
+  const shortened = task.run?.compactions ? `, history shortened ${task.run.compactions}×` : "";
+  const header = `DeepSeek task ${task.id} [${task.type}, ${task.model}${task.readOnly ? ", read-only" : ""}] ${statusText(task)} after ${task.steps} steps${shortened}`;
   const errorText = task.error ? `Error: ${task.error}` : "";
 
   if (detail === "full") {
@@ -132,6 +135,24 @@ export function compactReport(task: TaskRecord, approvals: ApprovalStore, maxCha
   const budget = Math.max(600, total - header.length - errorText.length - tail.length);
   const more = `full text: deepseek_get_report task_id=${task.id} section=summary`;
   return [header, errorText, cutSummary(summary, budget, more), tail].filter(Boolean).join("\n\n");
+}
+
+/** One report for a task split into areas: each area's short report, then the combined cost. */
+export function mergedReport(areas: string[], list: TaskRecord[], approvals: ApprovalStore, maxChars: number): string {
+  const perArea = Math.max(700, Math.round((maxChars * 2) / list.length));
+  const total = new UsageTotals();
+  const parts = list.map((t, i) => {
+    total.merge(t.usage);
+    return `## Area: ${areas[i]}
+${compactReport(t, approvals, perArea, "brief")}`;
+  });
+  const ids = list.map((t) => t.id).join(", ");
+  const done = list.filter((t) => t.status === "done").length;
+  return [
+    `DeepSeek split task: ${list.length} areas (${ids}), ${done} finished normally. Follow up per area with its task_id.`,
+    ...parts,
+    `Total DeepSeek usage: ${total.summary()}`,
+  ].join("\n\n");
 }
 
 export const REPORT_SECTIONS = ["summary", "files", "diff", "commands", "trace"] as const;

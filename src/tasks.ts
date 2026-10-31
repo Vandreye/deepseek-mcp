@@ -31,7 +31,8 @@ export interface TaskRecord {
   error?: string;
   steps: number;
   /** Limits of the latest run, and how far it got (for the report). */
-  run?: { maxSteps: number; steps: number; maxTokens: number; inputTokens: number };
+  /** inputTokens is weighted (cached tokens count at cacheWeight); rawInputTokens is not. */
+  run?: { maxSteps: number; steps: number; maxTokens: number; inputTokens: number; rawInputTokens: number; compactions: number };
   usage: UsageTotals;
   created: Date;
 }

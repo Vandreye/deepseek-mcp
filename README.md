@@ -63,7 +63,7 @@ You can also just say it: "have DeepSeek review this" or "do this one yourself".
 
 | Tool | Purpose |
 |---|---|
-| `deepseek_task` | Delegate a task. DeepSeek works until done and returns a compact report. `task_id` continues an earlier task cheaply, because DeepSeek's prompt cache is reused. |
+| `deepseek_task` | Delegate a task. DeepSeek works until done and returns a compact report. `task_id` continues an earlier task cheaply, because DeepSeek's prompt cache is reused. `areas: ["auth", "feeds"]` splits a big job into parallel sub-tasks with one merged report. `max_steps` / `max_tokens` raise the budget for one call. |
 | `deepseek_ask` | One-shot question with optional files, no tools. A cheap second opinion. |
 | `deepseek_get_report` | Fetch details only when needed: summary, files, a diff, command output, or the tool-call trace. |
 | `deepseek_routing` | Show or change the routing and the default model per task type. |
@@ -72,6 +72,8 @@ You can also just say it: "have DeepSeek review this" or "do this one yourself".
 ## Models and cost
 
 The default is `deepseek-flash`. Claude can pick `pro` (`deepseek-v4-pro`) for hard tasks. To always use `pro` for a task type, set it once with `/route review pro`; it is stored in `~/.deepseek-mcp/models.json` (or `<project>/.deepseek-mcp/models.json`), for example `{ "review": "pro", "default": "flash" }`. Every report ends with DeepSeek's token use and a cost estimate at peak prices; off-peak is half.
+
+Long runs stay cheap: cached input (the re-sent history) counts at 10% toward the token budget, and once a prompt passes about 60k tokens, old tool outputs are shortened to one-line summaries.
 
 ## Safety
 
