@@ -49,7 +49,8 @@ Each value is `deepseek`, `claude` or `ask`. With `ask`, Claude asks you each ti
 
 | Command | What it does |
 |---|---|
-| `/route` | Show the routing |
+| `/route` | Open a menu to pick who handles each task type |
+| `/route show` | Show the routing |
 | `/route code deepseek review claude` | Change it (add `--project` to change only this project) |
 | `/ds <task>` | Send this task to DeepSeek, whatever the routing says |
 | `/ds-plan`, `/ds-code`, `/ds-review`, `/ds-fix`, `/ds-debug`, `/ds-tests` | Same, with a specific role |
