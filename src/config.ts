@@ -17,12 +17,39 @@ export interface ModelInfo {
   price: { cacheHit: number; cacheMiss: number; output: number };
 }
 
+export type Thinking = "enabled" | "disabled";
+export const THINKING_MODES: readonly Thinking[] = ["enabled", "disabled"];
+
+/**
+ * Thinking costs output tokens, so only the task types that need it get it:
+ * off for code, tests, docs, question, general; on (at "low" effort) for the rest.
+ */
+const DEFAULT_THINKING: Record<TaskType, Thinking> = {
+  plan: "enabled",
+  code: "disabled",
+  review: "enabled",
+  bugfix: "enabled",
+  debug: "enabled",
+  research: "enabled",
+  tests: "disabled",
+  docs: "disabled",
+  question: "disabled",
+  general: "disabled",
+};
+
+const DEFAULT_REASONING_EFFORT = "low";
+
 export interface Config {
   apiKey: string;
   baseUrl: string;
   models: Record<ModelKey, ModelInfo>;
-  thinking: "enabled" | "disabled";
-  reasoningEffort: string;
+  /** Thinking mode per task type (DEEPSEEK_THINKING and DEEPSEEK_THINKING_<TYPE> override). */
+  thinkingByType: Record<TaskType, Thinking>;
+  /** Reasoning effort per task type, only sent when thinking is on. */
+  reasoningEffortByType: Record<TaskType, string>;
+  /** max_tokens for each tool-loop step and for the final report. */
+  maxToolStepTokens: number;
+  maxFinalTokens: number;
   /** Step limit for task types without their own entry in maxStepsByType. */
   maxSteps: number;
   /** Bigger limits for exploring task types (reviews and research read a lot). */
@@ -44,6 +71,31 @@ export interface Config {
 function num(name: string, def: number): number {
   const v = Number(process.env[name]);
   return Number.isFinite(v) && v > 0 ? v : def;
+}
+
+function envChoice(name: string, allowed: readonly string[]): string | undefined {
+  const v = process.env[name];
+  return v && allowed.includes(v) ? v : undefined;
+}
+
+/** Per-type thinking: env DEEPSEEK_THINKING_<TYPE> wins, then DEEPSEEK_THINKING, then the defaults. */
+function thinkingDefaults(): Record<TaskType, Thinking> {
+  const out = { ...DEFAULT_THINKING };
+  const global = envChoice("DEEPSEEK_THINKING", THINKING_MODES) as Thinking | undefined;
+  for (const t of Object.keys(out) as TaskType[]) {
+    out[t] = (envChoice(`DEEPSEEK_THINKING_${t.toUpperCase()}`, THINKING_MODES) as Thinking | undefined) ?? global ?? out[t];
+  }
+  return out;
+}
+
+/** Per-type reasoning effort: env DEEPSEEK_REASONING_EFFORT_<TYPE> wins, then DEEPSEEK_REASONING_EFFORT. */
+function effortDefaults(): Record<TaskType, string> {
+  const out = {} as Record<TaskType, string>;
+  const global = process.env.DEEPSEEK_REASONING_EFFORT;
+  for (const t of Object.keys(DEFAULT_THINKING) as TaskType[]) {
+    out[t] = process.env[`DEEPSEEK_REASONING_EFFORT_${t.toUpperCase()}`] || global || DEFAULT_REASONING_EFFORT;
+  }
+  return out;
 }
 
 function readApiKey(): string {
@@ -69,8 +121,10 @@ export function loadConfig(): Config {
         price: { cacheHit: 0.044, cacheMiss: 1.32, output: 3.96 },
       },
     },
-    thinking: process.env.DEEPSEEK_THINKING === "disabled" ? "disabled" : "enabled",
-    reasoningEffort: process.env.DEEPSEEK_REASONING_EFFORT || "high",
+    thinkingByType: thinkingDefaults(),
+    reasoningEffortByType: effortDefaults(),
+    maxToolStepTokens: num("DEEPSEEK_MAX_TOOL_STEP_TOKENS", 8_000),
+    maxFinalTokens: num("DEEPSEEK_MAX_FINAL_TOKENS", 16_000),
     maxSteps: num("DEEPSEEK_MAX_STEPS", 25),
     maxStepsByType: {
       review: num("DEEPSEEK_MAX_STEPS_REVIEW", 80),
@@ -96,4 +150,14 @@ export function loadConfig(): Config {
 /** Default step limit for a task type. */
 export function stepsFor(cfg: Config, type: TaskType): number {
   return cfg.maxStepsByType[type] ?? cfg.maxSteps;
+}
+
+/** Thinking mode for a task type. With thinking off, no reasoning tokens are generated. */
+export function thinkingFor(cfg: Config, type?: TaskType): Thinking {
+  return (type && cfg.thinkingByType[type]) || "disabled";
+}
+
+/** Reasoning effort for a task type; the API only gets it when thinking is on. */
+export function reasoningEffortFor(cfg: Config, type?: TaskType): string {
+  return (type && cfg.reasoningEffortByType[type]) || DEFAULT_REASONING_EFFORT;
 }

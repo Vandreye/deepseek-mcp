@@ -59,16 +59,15 @@ function askUser(): AskUser | undefined {
   };
 }
 
+/** One-line routing summary; the full routing and model tables live in deepseek_routing's output. */
 function taskDescription(): string {
   let routing = "unavailable";
-  let models = "flash unless set";
   try {
     routing = describeRouting(loadRouting(workspaceOf(), HOME_DIR));
-    models = describeModels(loadModels(workspaceOf(), HOME_DIR));
   } catch {
     /* default workspace may be invalid; routing is checked on each call anyway */
   }
-  return `Hand a task to DeepSeek (cheap subagent; reads/writes files, runs tests, works until done). USER ROUTING: ${routing}. Only use for types routed to deepseek, or when the user explicitly asked for DeepSeek (set user_override). "ask" = ask the user first. Default models (user's choice; omit model to use them): ${models}. Give file paths, not contents. Big jobs (e.g. whole-project review): pass areas=[...] to run one sub-task per area in parallel with a merged report. Returns a compact report.`;
+  return `Hand a task to DeepSeek (cheap subagent; reads/writes files, runs tests, works until done). USER ROUTING: ${routing}. Only use for types routed to deepseek, or when the user explicitly asked for DeepSeek (set user_override). "ask" = ask the user first. Omit model to use the user's default (see deepseek_routing). Give file paths, not contents. Big jobs: pass areas=[...] for parallel sub-tasks with one merged report. Returns a compact report.`;
 }
 
 const taskTool = server.registerTool(
@@ -134,6 +133,11 @@ function agentDeps(extra: { signal: AbortSignal; _meta?: { progressToken?: strin
   };
 }
 
+/** deepseek_ask is a cheap second opinion: cap each file, the whole context and the reply. */
+const ASK_FILE_CHARS = 8_000;
+const ASK_CONTEXT_CHARS = 40_000;
+const ASK_MAX_TOKENS = 4_000;
+
 server.registerTool(
   "deepseek_ask",
   {
@@ -154,8 +158,15 @@ server.registerTool(
       let context = "";
       for (const f of a.files ?? []) {
         const s = resolveSafe(workspace, f, "read");
-        context += `\n\n--- ${s.rel} ---\n${fs.readFileSync(s.abs, "utf8")}`;
-        if (context.length > 400_000) throw new Error("Files are too large for deepseek_ask; use deepseek_task.");
+        const raw = fs.readFileSync(s.abs, "utf8");
+        const body = raw.length > ASK_FILE_CHARS
+          ? `${raw.slice(0, ASK_FILE_CHARS)}\n…[${raw.length - ASK_FILE_CHARS} chars cut; grep for the rest or use deepseek_task]…`
+          : raw;
+        context += `\n\n--- ${s.rel} ---\n${body}`;
+        if (context.length > ASK_CONTEXT_CHARS) {
+          context = `${context.slice(0, ASK_CONTEXT_CHARS)}\n…[context cut at ${ASK_CONTEXT_CHARS} chars; use deepseek_task for more]…`;
+          break;
+        }
       }
       const key = (a.model ?? modelFor(loadModels(workspace, HOME_DIR), "question")) as ModelKey;
       const r = await chat(
@@ -165,6 +176,8 @@ server.registerTool(
             { role: "system", content: "Answer for Claude, which orchestrates the work. Be concise (under ~200 words unless more is truly needed), concrete, no preamble." },
             { role: "user", content: a.question + context },
           ],
+          max_tokens: ASK_MAX_TOKENS,
+          thinking: "disabled",
         },
         extra.signal,
       );
@@ -199,7 +212,7 @@ server.registerTool(
       if (a.set || a.models) taskTool.update({ description: taskDescription() });
       const table = loadRouting(workspace, HOME_DIR);
       return text(
-        `Routing: ${describeRouting(table)}\nModels: ${describeModels(loadModels(workspace, HOME_DIR))}` +
+        `Routing: ${describeRouting(table)}\nDefault model per type: ${describeModels(loadModels(workspace, HOME_DIR))}` +
           `\nUser files: ${userRoutingPath(HOME_DIR)}, ${userModelsPath(HOME_DIR)}` +
           `\nProject files: ${projectRoutingPath(workspace)}, ${projectModelsPath(workspace)}` +
           `\nTypes: ${TASK_TYPES.join(", ")}, default. Routing values: deepseek | claude | ask. Model values: flash | pro.`,

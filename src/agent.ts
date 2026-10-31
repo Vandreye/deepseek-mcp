@@ -1,5 +1,5 @@
 import type { ApprovalStore, AskUser } from "./approvals.js";
-import { stepsFor, type Config, type ModelKey } from "./config.js";
+import { reasoningEffortFor, stepsFor, thinkingFor, type Config, type ModelKey } from "./config.js";
 import type { ChatFn } from "./deepseek.js";
 import { compactHistory } from "./compact.js";
 import { auditLogger, ensureWorkspaceDir } from "./log.js";
@@ -100,6 +100,9 @@ async function runLoop(task: TaskRecord, deps: AgentDeps, maxSteps: number, maxT
   const hitAtStart = task.usage.cacheHit;
   const missAtStart = task.usage.cacheMiss;
   const stepsAtStart = task.steps;
+  // Cheap types run without thinking; planning/review/debug/research think at low effort.
+  const thinking = thinkingFor(config, task.type);
+  const reasoningEffort = reasoningEffortFor(config, task.type);
   const run = { maxSteps, steps: 0, maxTokens, inputTokens: 0, rawInputTokens: 0, compactions: 0 };
   task.run = run;
   // Cached input costs about a tenth, so it counts for less against the budget.
@@ -120,7 +123,13 @@ async function runLoop(task: TaskRecord, deps: AgentDeps, maxSteps: number, maxT
         task.status = "token_limit";
         break;
       }
-      const r = await chat({ model: model.id, messages: task.messages, tools }, deps.signal);
+      const r = await chat(
+        {
+          model: model.id, messages: task.messages, tools,
+          max_tokens: config.maxToolStepTokens, thinking, reasoning_effort: reasoningEffort,
+        },
+        deps.signal,
+      );
       task.usage.add(r.usage, model);
       task.steps++;
       task.messages.push(r.message);
@@ -166,7 +175,13 @@ async function runLoop(task: TaskRecord, deps: AgentDeps, maxSteps: number, maxT
       role: "user",
       content: "Limit reached. Stop using tools and write your final report now: what is done, what is left.",
     });
-    const r = await chat({ model: model.id, messages: task.messages, tools, tool_choice: "none" }, deps.signal);
+    const r = await chat(
+      {
+        model: model.id, messages: task.messages, tools, tool_choice: "none",
+        max_tokens: config.maxFinalTokens, thinking, reasoning_effort: reasoningEffort,
+      },
+      deps.signal,
+    );
     task.usage.add(r.usage, model);
     task.messages.push(r.message);
     used();

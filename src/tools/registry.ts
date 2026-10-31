@@ -18,7 +18,7 @@ export interface ToolContext {
   log: (entry: Record<string, unknown>) => void;
 }
 
-const TOOL_OUTPUT_MAX = 30_000;
+const TOOL_OUTPUT_MAX = 8_000;
 
 function fn(name: string, description: string, properties: Record<string, unknown>, required: string[] = []): ToolDef {
   return { type: "function", function: { name, description, parameters: { type: "object", properties, required } } };
@@ -137,7 +137,7 @@ async function runCommand(ctx: ToolContext, command: string): Promise<string> {
   const r = await runShell(line, ctx.task.workspace, ctx.config.commandTimeoutMs);
   ctx.task.commands.push({ command: line, exitCode: r.exitCode, output: r.output, status: r.timedOut ? "timeout" : "ran" });
   const head = r.timedOut ? `Timed out after ${ctx.config.commandTimeoutMs / 1000}s.` : `Exit code ${r.exitCode}.`;
-  return `${head}\n${truncate(r.output, 15_000)}`;
+  return `${head}\n${truncate(r.output, 6_000)}`;
 }
 
 async function requestDelete(ctx: ToolContext, paths: unknown, reason: string): Promise<string> {

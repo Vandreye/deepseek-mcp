@@ -94,13 +94,13 @@ describe("compact report", () => {
 });
 
 describe("partial reads", () => {
-  it("reads 400 lines by default and points to grep and offset", async () => {
+  it("reads 200 lines by default and points to grep and offset", async () => {
     const ws = tempWorkspace();
     fs.writeFileSync(path.join(ws, "big.txt"), Array.from({ length: 1000 }, (_, i) => `l${i + 1}`).join("\n"));
     const out = await executeTool(makeCtx(ws), "read_file", JSON.stringify({ path: "big.txt", limit: null }));
-    expect(out).toContain("l400");
-    expect(out).not.toContain("l401\n");
-    expect(out).toMatch(/file has 1000 lines; showed 1-400.*offset=401/);
+    expect(out).toContain("l200");
+    expect(out).not.toContain("l201\n");
+    expect(out).toMatch(/file has 1000 lines; showed 1-200.*offset=201/);
   });
 });
 

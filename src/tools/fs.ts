@@ -8,9 +8,10 @@ export const IGNORED_DIRS = new Set([
   "node_modules", ".git", WORKSPACE_DIR_NAME, ".venv", "venv", "__pycache__", ".next", ".turbo", ".cache",
 ]);
 
-const MAX_READ_CHARS = 60_000;
+// Stay under TOOL_OUTPUT_MAX (8k) so reads stop with a clean "continue at offset" note.
+const MAX_READ_CHARS = 7_800;
 /** Lines returned when no limit is given. Big files should be read in ranges. */
-export const DEFAULT_READ_LINES = 400;
+export const DEFAULT_READ_LINES = 200;
 
 export function readFile(task: TaskRecord, p: string, offset = 1, limit = DEFAULT_READ_LINES): string {
   const { abs, rel } = resolveSafe(task.workspace, p, "read");

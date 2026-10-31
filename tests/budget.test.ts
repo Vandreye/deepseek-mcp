@@ -46,6 +46,21 @@ describe("token budget", () => {
   });
 });
 
+describe("thinking and output caps per task type", () => {
+  it("thinks only for the hard types, and caps tool steps and the final report", async () => {
+    const { chat, requests } = scripted([listCall(), { role: "assistant", content: "partial" }],
+      { prompt_tokens: 1000, completion_tokens: 10 });
+    const cfg = { ...testConfig(), compactTokens: 1e9 };
+    await startTask(input({ maxSteps: 1 }), deps(chat, cfg)); // type "review"
+    expect(requests[0]).toMatchObject({ thinking: "enabled", reasoning_effort: "low", max_tokens: 8000 });
+    expect(requests[1]).toMatchObject({ thinking: "enabled", max_tokens: 16000 }); // final report
+
+    const code = scripted([{ role: "assistant", content: "done" }], { prompt_tokens: 1000, completion_tokens: 10 });
+    await startTask(input({ type: "code" }), deps(code.chat, cfg));
+    expect(code.requests[0].thinking).toBe("disabled");
+  });
+});
+
 describe("history compaction", () => {
   it("shortens old tool outputs and keeps recent ones and DeepSeek's notes", () => {
     const big = "line\n".repeat(500);
@@ -61,6 +76,20 @@ describe("history compaction", () => {
     expect(tools.slice(7).every((m) => m.content === big)).toBe(true);
     expect(messages.filter((m) => m.content?.startsWith("note src/a.ts:")).length).toBe(10);
     expect(compactHistory(messages, 3)).toBe(0); // already shortened
+  });
+
+  it("drops reasoning_content from all but the latest assistant message", () => {
+    const messages: ChatMessage[] = [
+      { role: "system", content: "s" },
+      { role: "assistant", content: "a1", reasoning_content: "think-1", tool_calls: [{ id: "c1", type: "function", function: { name: "list_dir", arguments: "{}" } }] },
+      { role: "tool", tool_call_id: "c1", content: "small output" },
+      { role: "assistant", content: "a2", reasoning_content: "think-22" },
+    ];
+    expect(compactHistory(messages, 8)).toBe("think-1".length); // only the old reasoning goes
+    expect(messages[1].reasoning_content).toBeUndefined();
+    expect(messages[1].content).toBe("a1"); // only the reasoning goes
+    expect(messages[3].reasoning_content).toBe("think-22"); // the latest one stays
+    expect(compactHistory(messages, 8)).toBe(0); // nothing left to strip
   });
 
   it("runs during a task once the prompt is big", async () => {

@@ -1,4 +1,4 @@
-import type { Config, ModelInfo } from "./config.js";
+import type { Config, ModelInfo, Thinking } from "./config.js";
 
 export interface ToolCall {
   id: string;
@@ -33,6 +33,10 @@ export interface ChatRequest {
   tools?: ToolDef[];
   tool_choice?: "auto" | "none";
   max_tokens?: number;
+  /** Thinking mode for this call (default: off). */
+  thinking?: Thinking;
+  /** Sent only when thinking is on (default: "low"). */
+  reasoning_effort?: string;
 }
 
 export interface ChatResponse {
@@ -59,13 +63,14 @@ export function createDeepSeekChat(cfg: Config): ChatFn {
         "DEEPSEEK_API_KEY is not set. Set it as an environment variable or put the key in ~/.deepseek-mcp/api-key, then restart Claude Code.",
       );
     }
+    const thinking = req.thinking ?? "disabled";
     const body: Record<string, unknown> = {
       model: req.model,
       messages: req.messages,
       stream: false,
-      thinking: { type: cfg.thinking },
+      thinking: { type: thinking },
     };
-    if (cfg.thinking === "enabled") body.reasoning_effort = cfg.reasoningEffort;
+    if (thinking === "enabled") body.reasoning_effort = req.reasoning_effort ?? "low";
     if (req.tools?.length) {
       body.tools = req.tools;
       body.tool_choice = req.tool_choice ?? "auto";
