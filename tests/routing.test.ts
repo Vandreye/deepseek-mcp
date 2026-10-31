@@ -40,3 +40,19 @@ describe("routing", () => {
     expect(describeRouting(t)).toContain("code→deepseek");
   });
 });
+
+describe("efforts", () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "dsmcp-home-"));
+  const ws = tempWorkspace();
+
+  it("saves per type, project wins, auto removes the entry", async () => {
+    const { effortFor, loadEfforts, saveEfforts } = await import("../src/routing.js");
+    expect(effortFor(loadEfforts(ws, home), "review")).toBeUndefined();
+    saveEfforts("user", { review: "high", default: "low" }, ws, home);
+    saveEfforts("project", { review: "medium" }, ws, home);
+    expect(effortFor(loadEfforts(ws, home), "review")).toBe("medium");
+    expect(effortFor(loadEfforts(ws, home), "code")).toBe("low");
+    saveEfforts("project", { review: "auto" }, ws, home);
+    expect(effortFor(loadEfforts(ws, home), "review")).toBe("high");
+  });
+});

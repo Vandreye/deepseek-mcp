@@ -59,6 +59,16 @@ describe("thinking and output caps per task type", () => {
     await startTask(input({ type: "code" }), deps(code.chat, cfg));
     expect(code.requests[0].thinking).toBe("disabled");
   });
+
+  it("uses the user's /ds-effort choice over the defaults", async () => {
+    const reply = () => scripted([{ role: "assistant", content: "done" }], { prompt_tokens: 1000, completion_tokens: 10 });
+    const high = reply();
+    await startTask(input({ type: "code" }), { ...deps(high.chat), effortFor: () => "high" as const });
+    expect(high.requests[0]).toMatchObject({ thinking: "enabled", reasoning_effort: "high" });
+    const off = reply();
+    await startTask(input(), { ...deps(off.chat), effortFor: () => "off" as const }); // review
+    expect(off.requests[0].thinking).toBe("disabled");
+  });
 });
 
 describe("history compaction", () => {

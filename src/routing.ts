@@ -147,3 +147,69 @@ export function describeModels(table: ModelTable): string {
   const parts = TASK_TYPES.filter((t) => table[t]).map((t) => `${t}→${table[t]}`);
   return [...parts, `other→${table.default ?? "flash"}`].join(", ");
 }
+
+// ---- Thinking effort per task type (/ds-effort) ----
+
+/** off = no thinking; low/medium/high = thinking at that reasoning_effort; auto = built-in default. */
+export const EFFORTS = ["off", "low", "medium", "high"] as const;
+export type Effort = (typeof EFFORTS)[number];
+export type EffortTable = Partial<Record<TaskType | "default", Effort>>;
+
+export const EFFORTS_FILE = "efforts.json";
+
+export function userEffortsPath(homeDir: string): string {
+  return path.join(homeDir, EFFORTS_FILE);
+}
+
+export function projectEffortsPath(workspace: string): string {
+  return path.join(workspace, WORKSPACE_DIR_NAME, EFFORTS_FILE);
+}
+
+function readEfforts(file: string): EffortTable {
+  try {
+    const raw = JSON.parse(fs.readFileSync(file, "utf8"));
+    const out: EffortTable = {};
+    for (const [key, val] of Object.entries(raw ?? {})) {
+      if ((key === "default" || (TASK_TYPES as readonly string[]).includes(key)) && (EFFORTS as readonly string[]).includes(val as string)) {
+        out[key as TaskType] = val as Effort;
+      }
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+/** User file, then project file (most specific wins). Empty means built-in defaults. */
+export function loadEfforts(workspace: string, homeDir: string): EffortTable {
+  return { ...readEfforts(userEffortsPath(homeDir)), ...readEfforts(projectEffortsPath(workspace)) };
+}
+
+/** The user's effort for a type, or undefined to keep the built-in default. */
+export function effortFor(table: EffortTable, type: TaskType): Effort | undefined {
+  return table[type] ?? table.default;
+}
+
+/** Saves changes; "auto" removes the entry so the built-in default applies again. */
+export function saveEfforts(
+  scope: "user" | "project",
+  changes: Partial<Record<TaskType | "default", Effort | "auto">>,
+  workspace: string,
+  homeDir: string,
+): string {
+  const file = scope === "user" ? userEffortsPath(homeDir) : projectEffortsPath(workspace);
+  const next: Record<string, string> = { ...readEfforts(file) };
+  for (const [k, v] of Object.entries(changes)) {
+    if (v === "auto") delete next[k];
+    else if (v) next[k] = v;
+  }
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, JSON.stringify(next, null, 2) + "\n");
+  return file;
+}
+
+/** e.g. "review→high, other→auto". */
+export function describeEfforts(table: EffortTable): string {
+  const parts = TASK_TYPES.filter((t) => table[t]).map((t) => `${t}→${table[t]}`);
+  return [...parts, `other→${table.default ?? "auto"}`].join(", ");
+}

@@ -4,7 +4,7 @@ import type { ChatFn } from "./deepseek.js";
 import { compactHistory } from "./compact.js";
 import { auditLogger, ensureWorkspaceDir } from "./log.js";
 import { systemPrompt, userPrompt } from "./prompts.js";
-import type { TaskType } from "./routing.js";
+import type { Effort, TaskType } from "./routing.js";
 import type { TaskRecord, TaskStore } from "./tasks.js";
 import { executeTool, toolDefs } from "./tools/registry.js";
 
@@ -16,6 +16,8 @@ export interface AgentDeps {
   askUser?: AskUser;
   onProgress?: (step: number, maxSteps: number, message: string) => void;
   signal?: AbortSignal;
+  /** The user's /ds-effort choice for a task type (undefined = built-in default). */
+  effortFor?: (workspace: string, type: TaskType) => Effort | undefined;
 }
 
 export interface NewTask {
@@ -101,8 +103,10 @@ async function runLoop(task: TaskRecord, deps: AgentDeps, maxSteps: number, maxT
   const missAtStart = task.usage.cacheMiss;
   const stepsAtStart = task.steps;
   // Cheap types run without thinking; planning/review/debug/research think at low effort.
-  const thinking = thinkingFor(config, task.type);
-  const reasoningEffort = reasoningEffortFor(config, task.type);
+  // The user's /ds-effort choice wins over the defaults.
+  const userEffort = deps.effortFor?.(task.workspace, task.type);
+  const thinking = userEffort ? (userEffort === "off" ? "disabled" : "enabled") : thinkingFor(config, task.type);
+  const reasoningEffort = userEffort && userEffort !== "off" ? userEffort : reasoningEffortFor(config, task.type);
   const run = { maxSteps, steps: 0, maxTokens, inputTokens: 0, rawInputTokens: 0, compactions: 0 };
   task.run = run;
   // Cached input costs about a tenth, so it counts for less against the budget.

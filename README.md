@@ -53,6 +53,7 @@ Each value is `deepseek`, `claude` or `ask`. With `ask`, Claude asks you each ti
 | `/route show` | Show the routing |
 | `/route code deepseek review claude` | Change it (add `--project` to change only this project) |
 | `/route review pro debug pro` | Set DeepSeek's default model per task type |
+| `/ds-effort`, `/ds-effort high`, `/ds-effort review high code off` | Set DeepSeek's thinking effort (off, low, medium, high, auto) per task type; stored in `efforts.json` |
 | `/ds <task>` | Send this task to DeepSeek, whatever the routing says |
 | `/ds-plan`, `/ds-code`, `/ds-review`, `/ds-fix`, `/ds-debug`, `/ds-tests` | Same, with a specific role |
 | `/ds-approve [ids\|all\|reject ids]` | See or answer DeepSeek's pending deletes and commands |

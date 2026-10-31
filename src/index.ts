@@ -9,7 +9,8 @@ import { HOME_DIR, loadConfig, type ModelKey } from "./config.js";
 import { createDeepSeekChat, UsageTotals, type ChatFn } from "./deepseek.js";
 import { compactReport, mergedReport, REPORT_SECTIONS, reportSection } from "./report.js";
 import {
-  checkRoute, describeModels, describeRouting, loadModels, loadRouting, MODEL_KEYS, modelFor, projectModelsPath,
+  checkRoute, describeEfforts, EFFORTS, effortFor, loadEfforts, projectEffortsPath, saveEfforts, userEffortsPath,
+  describeModels, describeRouting, loadModels, loadRouting, MODEL_KEYS, modelFor, projectModelsPath,
   projectRoutingPath, ROUTES, saveModels, saveRouting, TASK_TYPES, userModelsPath, userRoutingPath,
   type ModelTable, type RoutingTable, type TaskType,
 } from "./routing.js";
@@ -127,6 +128,7 @@ function agentDeps(extra: { signal: AbortSignal; _meta?: { progressToken?: strin
   const token = extra._meta?.progressToken;
   return {
     chat, config, approvals, tasks, askUser: askUser(), signal: extra.signal,
+    effortFor: (workspace, type) => effortFor(loadEfforts(workspace, HOME_DIR), type),
     onProgress: token === undefined ? undefined : (step, total, message) => {
       extra.sendNotification({ method: "notifications/progress", params: { progressToken: token, progress: step, total, message } }).catch(() => {});
     },
@@ -193,10 +195,11 @@ server.registerTool(
 server.registerTool(
   "deepseek_routing",
   {
-    description: "Show or change which agent handles each task type, and DeepSeek's default model per type (the user's choice). Only change it when the user asks.",
+    description: "Show or change which agent handles each task type, DeepSeek's default model and thinking effort per type (the user's choice). Only change it when the user asks.",
     inputSchema: {
       set: z.record(z.string(), z.enum(ROUTES)).optional().describe('e.g. {"code":"deepseek","review":"claude"}'),
       models: z.record(z.string(), z.enum(MODEL_KEYS)).optional().describe('Default DeepSeek model per type, e.g. {"review":"pro","default":"flash"}'),
+      effort: z.record(z.string(), z.enum([...EFFORTS, "auto"])).optional().describe('Thinking effort per type: off | low | medium | high | auto (built-in default), e.g. {"review":"high"}'),
       scope: z.enum(["user", "project"]).default("user").describe("user = all projects; project = this workspace only"),
       workspace: z.string().optional(),
     },
@@ -205,17 +208,19 @@ server.registerTool(
     try {
       const workspace = workspaceOf(a.workspace);
       const valid = [...TASK_TYPES, "default"] as string[];
-      const bad = [...Object.keys(a.set ?? {}), ...Object.keys(a.models ?? {})].filter((k) => !valid.includes(k));
+      const bad = [...Object.keys(a.set ?? {}), ...Object.keys(a.models ?? {}), ...Object.keys(a.effort ?? {})].filter((k) => !valid.includes(k));
       if (bad.length) return text(`Unknown task type(s): ${bad.join(", ")}. Valid: ${valid.join(", ")}`, true);
       if (a.set && Object.keys(a.set).length) saveRouting(a.scope, a.set as RoutingTable, workspace, HOME_DIR);
       if (a.models && Object.keys(a.models).length) saveModels(a.scope, a.models as ModelTable, workspace, HOME_DIR);
+      if (a.effort && Object.keys(a.effort).length) saveEfforts(a.scope, a.effort, workspace, HOME_DIR);
       if (a.set || a.models) taskTool.update({ description: taskDescription() });
       const table = loadRouting(workspace, HOME_DIR);
       return text(
         `Routing: ${describeRouting(table)}\nDefault model per type: ${describeModels(loadModels(workspace, HOME_DIR))}` +
-          `\nUser files: ${userRoutingPath(HOME_DIR)}, ${userModelsPath(HOME_DIR)}` +
-          `\nProject files: ${projectRoutingPath(workspace)}, ${projectModelsPath(workspace)}` +
-          `\nTypes: ${TASK_TYPES.join(", ")}, default. Routing values: deepseek | claude | ask. Model values: flash | pro.`,
+          `\nThinking effort per type: ${describeEfforts(loadEfforts(workspace, HOME_DIR))} (auto = off for code/tests/docs/question/general, low for the rest)` +
+          `\nUser files: ${userRoutingPath(HOME_DIR)}, ${userModelsPath(HOME_DIR)}, ${userEffortsPath(HOME_DIR)}` +
+          `\nProject files: ${projectRoutingPath(workspace)}, ${projectModelsPath(workspace)}, ${projectEffortsPath(workspace)}` +
+          `\nTypes: ${TASK_TYPES.join(", ")}, default. Routing values: deepseek | claude | ask. Model values: flash | pro. Effort values: off | low | medium | high | auto.`,
       );
     } catch (e) {
       return text(`deepseek_routing failed: ${(e as Error).message}`, true);
