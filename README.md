@@ -97,7 +97,7 @@ All settings are optional environment variables; see [.env.example](.env.example
 - `DEEPSEEK_MAX_STEPS_REVIEW` / `_RESEARCH` / `_DEBUG` / `_PLAN`: higher limits for those types (defaults 80 / 80 / 50 / 40)
 - `DEEPSEEK_THINKING=enabled`: turn thinking on for every type; it is off for code/tests/docs/question/general and on at `low` effort for plan/review/debug/bugfix/research. Per type: `DEEPSEEK_THINKING_<TYPE>`, `DEEPSEEK_REASONING_EFFORT[_<TYPE>]`
 - `DEEPSEEK_ELICITATION=off`: stop the server prompting you directly (then `approve_actions` acts on Claude's word)
-- `DEEPSEEK_WEB=off`: never offer `web_search` / `web_fetch`
+- `DEEPSEEK_WEB=on`: allow `web_search` / `web_fetch` (off by default; `/ds-research` then searches the web, otherwise it researches the workspace only)
 - `DEEPSEEK_STRICT_TOOLS=on`: strict tool schemas (DeepSeek beta; tool-using calls go to the `/beta` API), so tool arguments always match their schema. Off by default: in the benchmark they cost about 20% more DeepSeek tokens (more steps, longer tool calls) with no quality gain
 
 ## Development

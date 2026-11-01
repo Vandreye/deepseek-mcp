@@ -100,6 +100,8 @@ export const TASKS = [
   {
     id: "research-web",
     tool: "deepseek_task",
+    // The server keeps web access off unless DEEPSEEK_WEB=on, so this task turns it on.
+    env: { DEEPSEEK_WEB: "on" },
     args: { type: "research", web: true, task: "Using the web: in which Node.js major version did the built-in test runner (node:test) become stable? Cite a source URL." },
     check: ({ report }) => {
       const value = /\b(v|version |Node(\.js)? )20\b/i.test(report);

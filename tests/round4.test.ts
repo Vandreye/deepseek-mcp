@@ -123,6 +123,17 @@ describe("web tools", () => {
     expect(requests[0].tools!.map((t) => t.function.name)).not.toContain("web_fetch");
   });
 
+  it("stay off unless DEEPSEEK_WEB=on", async () => {
+    const ask = () => scripted([[{ role: "assistant", content: "r" }, "stop"]]);
+    expect(testConfig().webEnabled).toBe(false);
+    const off = await startTask(input({ web: true }), deps(ask().chat));
+    expect(off.web).toBe(false);
+    const on = ask();
+    const task = await startTask(input({ web: true }), { ...deps(on.chat), config: { ...testConfig(), compactTokens: 1e9, webEnabled: true } });
+    expect(task.web).toBe(true);
+    expect(on.requests[0].tools!.map((t) => t.function.name)).toContain("web_search");
+  });
+
   it("are refused when the task has no web access", async () => {
     const out = await executeTool(makeCtx(tempWorkspace(), true), "web_search", JSON.stringify({ query: "x" }));
     expect(out).toMatch(/not available/);

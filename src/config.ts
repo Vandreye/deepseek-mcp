@@ -46,7 +46,7 @@ export interface Config {
   baseUrl: string;
   /** Strict tool schemas (beta, uses the /beta base URL): DEEPSEEK_STRICT_TOOLS=on. Off by default: the benchmark showed ~20% more DeepSeek cost and no quality gain. */
   strictTools: boolean;
-  /** web_search / web_fetch may be offered to research tasks (DEEPSEEK_WEB=off disables). */
+  /** web_search / web_fetch may be offered to read-only tasks that ask for them. Off unless DEEPSEEK_WEB=on. */
   webEnabled: boolean;
   models: Record<ModelKey, ModelInfo>;
   /** Thinking mode per task type (DEEPSEEK_THINKING and DEEPSEEK_THINKING_<TYPE> override). */
@@ -122,7 +122,7 @@ export function loadConfig(): Config {
     apiKey: readApiKey(),
     baseUrl: (process.env.DEEPSEEK_BASE_URL || "https://api.deepseek.com").replace(/\/+$/, ""),
     strictTools: process.env.DEEPSEEK_STRICT_TOOLS === "on",
-    webEnabled: process.env.DEEPSEEK_WEB !== "off",
+    webEnabled: process.env.DEEPSEEK_WEB === "on",
     models: {
       flash: {
         id: process.env.DEEPSEEK_MODEL_FLASH || "deepseek-flash",

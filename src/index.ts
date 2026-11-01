@@ -90,7 +90,7 @@ const taskTool = server.registerTool(
         .describe("Input-token budget for this call, shared by all areas (cached counts ~10%). Default 3M per task/area"),
       areas: z.array(z.string().min(1)).min(2).max(8).optional()
         .describe("Split into parallel sub-tasks, one per area (e.g. [\"auth\",\"feeds\"]), one merged report"),
-      web: z.boolean().optional().describe("Give DeepSeek web_search/web_fetch (read-only tasks only)"),
+      web: z.boolean().optional().describe("Give DeepSeek web_search/web_fetch (read-only tasks; only if the user set DEEPSEEK_WEB=on)"),
       user_override: z.boolean().default(false).describe("User explicitly asked for DeepSeek"),
     },
   },
@@ -118,7 +118,13 @@ const taskTool = server.registerTool(
         return text(mergedReport(a.areas, list, approvals, config.maxReplyChars), list.every((t) => t.status === "error"));
       }
       const task = await startTask(input, deps);
-      return text(compactReport(task, approvals, config.maxReplyChars, a.detail), task.status === "error");
+      // Say so when web access was asked for but is turned off, so Claude doesn't expect cited URLs.
+      const webNote = a.web && !task.web
+        ? `
+
+(Web access is off${config.webEnabled ? " for tasks that can edit files" : "; DEEPSEEK_WEB=on enables it"}. DeepSeek used the workspace only.)`
+        : "";
+      return text(compactReport(task, approvals, config.maxReplyChars, a.detail) + webNote, task.status === "error");
     } catch (e) {
       return text(`deepseek_task failed: ${(e as Error).message}`, true);
     }
