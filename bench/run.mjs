@@ -110,7 +110,8 @@ function connect(version, workspace, home, probeFile, extraEnv = {}) {
     cwd: workspace,
     env: {
       ...cleanEnv, DEEPSEEK_API_KEY: KEY, DEEPSEEK_MCP_HOME: home, DEEPSEEK_WORKSPACE: workspace,
-      BENCH_PROBE_FILE: probeFile, ...version.env, ...extraEnv,
+      // A version's settings win over a task's, so "all off" really means off for every task.
+      BENCH_PROBE_FILE: probeFile, ...extraEnv, ...version.env,
     },
     stderr: "pipe",
   });
