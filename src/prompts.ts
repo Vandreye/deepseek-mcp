@@ -4,7 +4,7 @@ import type { TaskType } from "./routing.js";
 const ROLE: Record<TaskType, string> = {
   plan: "Produce an implementation plan. Explore the code first. Do not modify files. Your final reply IS the plan: numbered steps naming the files/functions to change, risks, and how to verify. Up to ~400 words.",
   code: "Implement the requested change. Read the relevant code first and follow the project's existing style. When done, run the project's tests/build/type-check if available and fix failures you caused.",
-  review: "Review the specified code (or the current git diff if none is named). Do not modify files unless asked. Report findings ranked by severity as `file:line — problem — suggested fix`. Only report real problems; skip style nitpicks unless asked.",
+  review: "Review the specified code (or the current git diff if none is named). Do not modify files unless asked. Report findings ranked by severity as `file:line — problem — suggested fix`, each ending with a seen-quote (see the self-check). Only report real problems; skip style nitpicks unless asked.",
   bugfix: "Find the root cause of the described bug and fix it with a minimal change. Reproduce or confirm with tests/commands where possible, and run the tests afterwards.",
   debug: "Troubleshoot the described problem: investigate code, logs and command output to find the root cause. Fix it if the cause is clear and the fix is safe; otherwise report the cause and the recommended fix.",
   research: "Investigate the codebase to answer the question. Do not modify files. Cite files and line numbers.",
@@ -15,13 +15,14 @@ const ROLE: Record<TaskType, string> = {
 };
 
 /** Types whose findings must be re-checked against the code before reporting. */
-const VERIFY_TYPES: TaskType[] = ["review", "debug", "research", "bugfix"];
+export const VERIFY_TYPES: TaskType[] = ["review", "debug", "research", "bugfix"];
 
 /** Types that explore a lot and should split their budget across areas up front. */
 const BUDGET_TYPES: TaskType[] = ["review", "research", "debug", "plan"];
 
 const VERIFY = `
-Self-check before your final reply: re-open every file:line you cite (read_file with a small offset/limit, or grep) and confirm the claim is true there. Drop or correct anything you cannot confirm. Never report a finding you have not seen in the code yourself.`;
+Self-check before your final reply: re-open every file:line you cite (read_file with a small offset/limit, or grep) and confirm the claim is true there. Drop or correct anything you cannot confirm. Never report a finding you have not seen in the code yourself.
+End each finding with — seen: \`<the exact code at that line, at most ~80 chars>\`, copied from your re-check. Claude trusts quoted findings without re-opening the file, so the quote must be exact. The quote is the evidence: keep each finding to 1-2 lines, without restating the code or describing your checks.`;
 
 function budgetRule(maxSteps: number, maxTokens: number, cacheWeight = 1): string {
   const cached = cacheWeight < 1 ? `; re-sent history is mostly cached and counts at ${Math.round(cacheWeight * 100)}%` : "";

@@ -22,7 +22,7 @@ const VERSION = "0.1.0";
 
 const INSTRUCTIONS = `DeepSeek subagent: a much cheaper model with file, search and test tools in the workspace.
 - The USER decides which agent does which task type. Follow the routing shown in deepseek_task's description, and explicit requests ("use DeepSeek for this" / "do it yourself"). Never route on your own judgment.
-- When delegating, save Claude tokens: write one short self-contained instruction, point to files by path (never paste contents), give the whole job in one call, and don't re-read changed files unless the report shows failures or the user asks. Use deepseek_get_report for details, task_id for follow-ups.
+- When delegating, save Claude tokens: write one short self-contained instruction, point to files by path (never paste contents), give the whole job in one call, and don't re-read changed files unless the report shows failures or the user asks. Findings ending in "seen: \`code\`" were re-checked by DeepSeek and the server confirmed the quote is at that line; don't re-open files just to verify them. Use deepseek_get_report for details, task_id for follow-ups.
 - DeepSeek cannot delete files or run unlisted commands; those wait for approval. Show pending items to the user; call approve_actions only when the user asks you to.`;
 
 const config = loadConfig();
@@ -71,10 +71,31 @@ function taskDescription(): string {
   return `Hand a task to DeepSeek (cheap subagent; reads/writes files, runs tests, works until done). USER ROUTING: ${routing}. Only use for types routed to deepseek, or when the user explicitly asked for DeepSeek (set user_override). "ask" = ask the user first. Omit model to use the user's default (see deepseek_routing). Give file paths, not contents. Big jobs: pass areas=[...] for parallel sub-tasks with one merged report. Returns a compact report.`;
 }
 
+/**
+ * Claude Code defers MCP tools behind a search step, which costs Claude an extra turn on every
+ * delegation. Load deepseek_task upfront when the user routes any type to DeepSeek (or "ask");
+ * with everything routed to Claude it stays deferred, so its schema isn't in every session.
+ * DEEPSEEK_ALWAYS_LOAD=on|off overrides.
+ */
+function taskMeta(): Record<string, unknown> | undefined {
+  const env = process.env.DEEPSEEK_ALWAYS_LOAD;
+  let load = env === "on";
+  if (env !== "on" && env !== "off") {
+    try {
+      load = Object.values(loadRouting(workspaceOf(), HOME_DIR)).some((r) => r !== "claude");
+    } catch {
+      load = false;
+    }
+  }
+  // Leave the key out rather than send false: Claude Code reads false as "load upfront" for some servers.
+  return load ? { "anthropic/alwaysLoad": true } : undefined;
+}
+
 const taskTool = server.registerTool(
   "deepseek_task",
   {
     description: taskDescription(),
+    _meta: taskMeta(),
     inputSchema: {
       task: z.string().describe("Self-contained instruction (or the follow-up message when task_id is set)"),
       type: z.enum(TASK_TYPES).default("general").describe("Task type, used for routing and DeepSeek's role"),
@@ -230,14 +251,14 @@ server.registerTool(
       if (a.set && Object.keys(a.set).length) saveRouting(a.scope, a.set as RoutingTable, workspace, HOME_DIR);
       if (a.models && Object.keys(a.models).length) saveModels(a.scope, a.models as ModelTable, workspace, HOME_DIR);
       if (a.effort && Object.keys(a.effort).length) saveEfforts(a.scope, a.effort, workspace, HOME_DIR);
-      if (a.set || a.models) taskTool.update({ description: taskDescription() });
+      if (a.set || a.models) taskTool.update({ description: taskDescription(), _meta: taskMeta() });
       const table = loadRouting(workspace, HOME_DIR);
       return text(
         `Routing: ${describeRouting(table)}\nDefault model per type: ${describeModels(loadModels(workspace, HOME_DIR))}` +
           `\nThinking effort per type: ${describeEfforts(loadEfforts(workspace, HOME_DIR))} (auto = off for code/tests/docs/question/general, low for the rest)` +
           `\nUser files: ${userRoutingPath(HOME_DIR)}, ${userModelsPath(HOME_DIR)}, ${userEffortsPath(HOME_DIR)}` +
           `\nProject files: ${projectRoutingPath(workspace)}, ${projectModelsPath(workspace)}, ${projectEffortsPath(workspace)}` +
-          `\nTypes: ${TASK_TYPES.join(", ")}, default. Routing values: deepseek | claude | ask. Model values: flash | pro. Effort values: off | low | medium | high | auto.`,
+          `\nTypes: ${TASK_TYPES.join(", ")}, default. Routing values: deepseek | claude | ask. Model values: flash | pro. Effort values: off | low | medium | high | max | auto.`,
       );
     } catch (e) {
       return text(`deepseek_routing failed: ${(e as Error).message}`, true);

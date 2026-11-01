@@ -108,3 +108,50 @@ DeepSeek (pro) reviewed this repo four times. Claude checked each finding before
 - **One tool error** in a tests-money run (2026-11-01 results) hasn't been looked at.
 - **Fixed overhead** is about 1,590 tokens per Claude session (7 tools plus instructions). It could be trimmed.
 - **Benchmark coverage:** pro and higher effort levels haven't been benchmarked; everything so far ran on flash.
+
+## 2026-11-01 (later): token review against DeepSeek's docs
+
+Checked the code against DeepSeek's current docs (pricing, context caching, thinking mode, change log). Model ids, prices, off-peak hours, cache-friendly ordering and the `medium` → `high` mapping all match. Web search billing starts 2026-11-01; it was already counted at $0.75 per 1,000.
+
+### Done
+- **Quoted findings (Claude side).** Review, debug, research and bugfix reports end each finding with `seen: \`code\``. The server checks each quote against the cited line (±3 lines) and adds `[quote NOT found at that line]` when it isn't there (`src/quotes.ts`). The server instructions tell Claude it can trust confirmed quotes without re-opening the file. Before, Claude re-checked every finding by reading the file.
+- **Fewer slash commands (Claude side).** 11 → 3: `/ds [type] <task>`, `/route` (now also sets thinking effort) and `/ds-approve`. Each command's description is in every Claude session. `npm run setup` removes the old ones it installed.
+- **Step cap follows thinking effort (DeepSeek side).** 8k at off/low, 16k at high, 32k at max; the redo and final report get twice that. A step cut off at the cap is thrown away and paid again, and a higher cap costs nothing unless used. `DEEPSEEK_MAX_TOOL_STEP_TOKENS` still sets a fixed cap.
+
+### Benchmark (flash, 3 repeats, `bench/results/2026-11-01T03-25-41.md` and `…03-29-28.md`)
+- First try: same pass rate, but reviews grew from ~500 to ~850 tokens. DeepSeek wrote more around each finding, not just the quote.
+- After adding "keep each finding to 1-2 lines; the quote is the evidence": report size −1%, DeepSeek cost −1%, all runs pass. One review-orders run found 3 of 4 planted bugs instead of 4 (within noise; watch it).
+- The step-cap change didn't show up: these tasks never reached 8k in one step. It matters on long runs at high effort.
+- The saving (Claude not re-reading files to check findings) isn't something the benchmark can measure.
+
+### Learned from the docs
+- With tools on, every earlier `reasoning_content` must be sent back and is put into the context again (400 error otherwise). So high effort makes every later step bigger too. History shortening keeps it whole.
+- The docs give no minimum size for cache hits. A shared prefix is only cached once it has been seen in at least two requests.
+
+### Shortened old reasoning (done)
+- **Live check:** with tools on, the API accepts a shortened or empty `reasoning_content` on old messages (no 400), and the prompt shrinks by that much (1,259 → 492 tokens in the test). The docs say to send it back in full.
+- **Built:** history shortening now also cuts the thinking of assistant messages older than the newest 8 tool outputs to 200 chars. If the API ever answers 400 about reasoning, the full text is put back, shortening of reasoning stops for that run, and the call is sent again. `DEEPSEEK_COMPACT_REASONING=off` turns it off.
+- **Benchmark** (`bench/results/2026-11-01T03-39-00.md`; shortening forced at 10k tokens in both versions so it triggers on small tasks): same pass rate, DeepSeek cost −14%, input tokens −27%, time −20%. At the normal 200k threshold only long runs see this.
+
+### Open
+- **Routing is all-Claude** in the user's `routing.json`, and effort is `high` for every type in `efforts.json`. Both are the user's choice.
+
+### Does delegating save Claude tokens? (measured)
+`bench/claude-vs-ds.mjs` runs each task through real Claude Code (`claude -p`, Opus 5.5) twice: Claude alone, and with this MCP and every type routed to DeepSeek. It uses a narrow tool allowlist (file tools, `npm test`, `node --test`, the DeepSeek tools). About $0.12-0.25 of Claude per run.
+- **First run** (`claude-vs-ds-2026-11-01T03-41-47.md`): delegating cost about 6% less overall. Small tasks cost 3-31% *more*. Every delegation took at least 3 Claude turns, because Claude Code hides MCP tools behind a search step, and loading `deepseek_task` was a turn of its own.
+- **Fix:** `deepseek_task` now sets `_meta["anthropic/alwaysLoad"]` when any type is routed to DeepSeek or "ask" (`DEEPSEEK_ALWAYS_LOAD=on|off` overrides). With all-Claude routing it stays deferred, so it costs nothing.
+- **After the fix** (`claude-vs-ds-…03-49-30.md` and `…03-51-47.md`), 2 repeats, Claude $ per task, alone → delegated:
+
+| task | alone | delegated | change |
+|---|---|---|---|
+| review-orders (small) | 0.102 | 0.112* | +10% |
+| research-upload | 0.121 | 0.110 | −9% |
+| bugfix-slug | 0.121 | 0.107 | −12% |
+| code-chunk | 0.157 | 0.112 | −29% |
+| review-legacy-high (18 files) | 0.197 | 0.135 | −31% |
+| tests-money | 0.234 | 0.129 | −45% |
+
+  *Without the first run, which paid a one-off cache write for the new tool list ($0.246).
+  - DeepSeek's cost is under $0.01 per task. Delegated runs take 2 Claude turns; alone it's 2-20.
+  - Pass rates: alone 10/12, delegated 11/12. tests-money fails often either way (alone 0/4, delegated 2/4). The check wants tests that pass on the good code; worth a look.
+- **Takeaway:** delegating pays off from small tasks upward once the tool is loaded upfront. Only a tiny review of one small file is cheaper for Claude to do itself. Most of Claude's cost per task is fixed (~10k-token system prompt, cache write), so the saving comes from fewer turns.

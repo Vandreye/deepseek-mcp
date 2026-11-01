@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { startFanOut, startTask } from "../src/agent.js";
 import { ApprovalStore } from "../src/approvals.js";
-import { compactHistory } from "../src/compact.js";
+import { compactHistory, restoreReasoning } from "../src/compact.js";
+import { DeepSeekError } from "../src/deepseek.js";
 import type { ChatFn, ChatMessage, ChatRequest, Usage } from "../src/deepseek.js";
 import { compactReport, mergedReport } from "../src/report.js";
 import { TaskStore } from "../src/tasks.js";
@@ -60,7 +61,7 @@ describe("thinking and output caps per task type", () => {
     expect(code.requests[0].thinking).toBe("disabled");
   });
 
-  it("uses the user's /ds-effort choice over the defaults", async () => {
+  it("uses the user's /route effort choice over the defaults", async () => {
     const reply = () => scripted([{ role: "assistant", content: "done" }], { prompt_tokens: 1000, completion_tokens: 10 });
     const high = reply();
     await startTask(input({ type: "code" }), { ...deps(high.chat), effortFor: () => "high" as const });
@@ -68,6 +69,22 @@ describe("thinking and output caps per task type", () => {
     const off = reply();
     await startTask(input(), { ...deps(off.chat), effortFor: () => "off" as const }); // review
     expect(off.requests[0].thinking).toBe("disabled");
+  });
+
+  it("gives deeper thinking a bigger step cap, and the final report twice that", async () => {
+    const run = async (effort: "high" | "max") => {
+      const r = scripted([listCall(), { role: "assistant", content: "partial" }], { prompt_tokens: 1000, completion_tokens: 10 });
+      await startTask(input({ maxSteps: 1 }), { ...deps(r.chat, { ...testConfig(), compactTokens: 1e9 }), effortFor: () => effort });
+      return r.requests.map((q) => q.max_tokens);
+    };
+    expect(await run("high")).toEqual([16000, 32000]);
+    expect(await run("max")).toEqual([32000, 64000]);
+  });
+
+  it("keeps DEEPSEEK_MAX_TOOL_STEP_TOKENS as a fixed cap", async () => {
+    const r = scripted([{ role: "assistant", content: "done" }], { prompt_tokens: 1000, completion_tokens: 10 });
+    await startTask(input(), { ...deps(r.chat, { ...testConfig(), maxToolStepTokens: 700 }), effortFor: () => "max" as const });
+    expect(r.requests[0].max_tokens).toBe(700);
   });
 });
 
@@ -88,7 +105,7 @@ describe("history compaction", () => {
     expect(compactHistory(messages, 3)).toBe(0); // already shortened
   });
 
-  it("keeps every reasoning_content (DeepSeek returns 400 without it when tools are used)", () => {
+  it("keeps reasoning_content whole unless asked to shorten it", () => {
     const messages: ChatMessage[] = [
       { role: "system", content: "s" },
       { role: "assistant", content: "a1", reasoning_content: "think-1", tool_calls: [{ id: "c1", type: "function", function: { name: "list_dir", arguments: "{}" } }] },
@@ -98,6 +115,45 @@ describe("history compaction", () => {
     expect(compactHistory(messages, 8)).toBe(0);
     expect(messages[1].reasoning_content).toBe("think-1");
     expect(messages[3].reasoning_content).toBe("think-22");
+  });
+
+  it("shortens old reasoning but not the reasoning next to recent tool outputs, and can put it back", () => {
+    const think = "t".repeat(1000);
+    const messages: ChatMessage[] = [{ role: "system", content: "s" }];
+    for (let i = 0; i < 5; i++) {
+      messages.push({ ...listCall(`c${i}`), reasoning_content: think });
+      messages.push({ role: "tool", tool_call_id: `c${i}`, content: "x" });
+    }
+    expect(compactHistory(messages, 2, 400, true)).toBeGreaterThan(0);
+    const rc = messages.filter((m) => m.role === "assistant").map((m) => m.reasoning_content!);
+    expect(rc.slice(0, 3).every((r) => r.startsWith("[shortened]") && r.length < 300)).toBe(true);
+    expect(rc.slice(3).every((r) => r === think)).toBe(true);
+    expect(restoreReasoning(messages)).toBe(3);
+    expect(messages.filter((m) => m.role === "assistant").every((m) => m.reasoning_content === think)).toBe(true);
+  });
+
+  it("puts the full reasoning back and retries once if the API refuses shortened reasoning", async () => {
+    const seen: (string | undefined)[][] = [];
+    let refused = false;
+    let n = 0;
+    const chat: ChatFn = async (req) => {
+      const rcs = req.messages.filter((m) => m.role === "assistant").map((m) => m.reasoning_content);
+      if (!refused && rcs.some((r) => r?.startsWith("[shortened]"))) {
+        refused = true;
+        throw new DeepSeekError("DeepSeek API 400: reasoning_content must be passed back", 400);
+      }
+      seen.push(rcs);
+      n++;
+      const message: ChatMessage = n < 14
+        ? { role: "assistant", content: "", reasoning_content: "r".repeat(600), tool_calls: [{ id: `c${n}`, type: "function", function: { name: "list_dir", arguments: "{}" } }] }
+        : { role: "assistant", content: "done" };
+      return { message, usage: { prompt_tokens: 300_000, completion_tokens: 10 }, finishReason: "stop" };
+    };
+    const cfg = { ...testConfig(), compactTokens: 50_000, maxTaskTokens: 1e12 };
+    const task = await startTask(input({ type: "code", maxSteps: 20 }), deps(chat, cfg));
+    expect(refused).toBe(true);
+    expect(task.status).toBe("done");
+    expect(seen.flat().some((r) => r?.startsWith("[shortened]"))).toBe(false);
   });
 
   it("runs during a task once the prompt is big", async () => {

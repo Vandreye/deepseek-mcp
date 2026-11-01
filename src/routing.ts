@@ -148,7 +148,7 @@ export function describeModels(table: ModelTable): string {
   return [...parts, `other→${table.default ?? "flash"}`].join(", ");
 }
 
-// ---- Thinking effort per task type (/ds-effort) ----
+// ---- Thinking effort per task type (/route <type> <level>) ----
 
 /**
  * off = no thinking; low/medium/high/max = thinking at that reasoning_effort; auto = built-in default.

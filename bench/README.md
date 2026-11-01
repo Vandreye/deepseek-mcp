@@ -12,6 +12,11 @@ npm run bench:compare -- bench/results/<file>.jsonl
 - `--tasks review-orders,bugfix-slug` runs a subset; `--parallel 3` runs that many at once; `--budget 3` stops at $3 (peak prices); `--model pro` switches model.
 - Results go to `bench/results/<time>.jsonl` (one line per run) and a `.md` summary next to it.
 
+Claude's side, with and without delegating (uses your Claude plan, about $0.12-0.25 per run):
+```
+node bench/claude-vs-ds.mjs --reps 2 [--tasks review-orders,code-chunk] [--model sonnet]
+```
+
 ## How it works
 
 Each run starts the version's MCP server (`dist/index.js`) in a fresh copy of a small test project and calls its tools the way Claude Code does. A preload script (`probe.mjs`, via `node --import`) records every request the server makes to DeepSeek, without changing the server. So any old commit can be measured too.

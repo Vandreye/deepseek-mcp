@@ -50,13 +50,13 @@ Each value is `deepseek`, `claude` or `ask`. With `ask`, Claude asks you each ti
 | Command | What it does |
 |---|---|
 | `/route` | Open a menu to pick who handles each task type |
-| `/route show` | Show the routing |
-| `/route code deepseek review claude` | Change it (add `--project` to change only this project) |
+| `/route show` | Show the routing, default models and thinking effort |
+| `/route code deepseek review claude` | Change who handles a type (add `--project` to change only this project) |
 | `/route review pro debug pro` | Set DeepSeek's default model per task type |
-| `/ds-effort`, `/ds-effort high`, `/ds-effort review high code off` | Set DeepSeek's thinking effort (off, low, medium, high, auto) per task type; stored in `efforts.json` |
+| `/route review high code off`, `/route all auto` | Set DeepSeek's thinking effort (off, low, medium, high, max, auto) per task type; stored in `efforts.json` |
 | `/ds <task>` | Send this task to DeepSeek, whatever the routing says |
-| `/ds-plan`, `/ds-code`, `/ds-review`, `/ds-fix`, `/ds-debug`, `/ds-tests` | Same, with a specific role |
-| `/ds-research <question>` | DeepSeek researches the codebase and the web (read-only, cites URLs) |
+| `/ds review <task>`, `/ds code …`, `/ds bugfix …`, `/ds debug …`, `/ds tests …`, `/ds plan …` | Same, with a specific role |
+| `/ds research <question>` | DeepSeek researches the codebase and the web (read-only, cites URLs) |
 | `/ds-approve [ids\|all\|reject ids]` | See or answer DeepSeek's pending deletes and commands |
 
 You can also just say it: "have DeepSeek review this" or "do this one yourself".
@@ -97,7 +97,7 @@ All settings are optional environment variables; see [.env.example](.env.example
 - `DEEPSEEK_MAX_STEPS_REVIEW` / `_RESEARCH` / `_DEBUG` / `_PLAN`: higher limits for those types (defaults 80 / 80 / 50 / 40)
 - `DEEPSEEK_THINKING=enabled`: turn thinking on for every type; it is off for code/tests/docs/question/general and on at `low` effort for plan/review/debug/bugfix/research. Per type: `DEEPSEEK_THINKING_<TYPE>`, `DEEPSEEK_REASONING_EFFORT[_<TYPE>]`
 - `DEEPSEEK_ELICITATION=off`: stop the server prompting you directly (then `approve_actions` acts on Claude's word)
-- `DEEPSEEK_WEB=on`: allow `web_search` / `web_fetch` (off by default; `/ds-research` then searches the web, otherwise it researches the workspace only)
+- `DEEPSEEK_WEB=on`: allow `web_search` / `web_fetch` (off by default; `/ds research` then searches the web, otherwise it researches the workspace only)
 - `DEEPSEEK_STRICT_TOOLS=on`: strict tool schemas (DeepSeek beta; tool-using calls go to the `/beta` API), so tool arguments always match their schema. Off by default: in the benchmark they cost about 20% more DeepSeek tokens (more steps, longer tool calls) with no quality gain
 
 ## Development

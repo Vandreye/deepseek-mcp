@@ -1,9 +1,10 @@
 import type { ApprovalStore, AskUser } from "./approvals.js";
-import { reasoningEffortFor, stepsFor, thinkingFor, type Config, type ModelKey } from "./config.js";
-import type { ChatFn, ChatMessage } from "./deepseek.js";
-import { compactHistory } from "./compact.js";
+import { reasoningEffortFor, stepCapFor, stepsFor, thinkingFor, type Config, type ModelKey } from "./config.js";
+import { DeepSeekError, type ChatFn, type ChatMessage } from "./deepseek.js";
+import { compactHistory, restoreReasoning } from "./compact.js";
 import { auditLogger, ensureWorkspaceDir } from "./log.js";
-import { systemPrompt, userPrompt } from "./prompts.js";
+import { systemPrompt, userPrompt, VERIFY_TYPES } from "./prompts.js";
+import { checkQuotes } from "./quotes.js";
 import type { Effort, TaskType } from "./routing.js";
 import type { TaskRecord, TaskStore } from "./tasks.js";
 import { executeTool, toolDefs } from "./tools/registry.js";
@@ -16,7 +17,7 @@ export interface AgentDeps {
   askUser?: AskUser;
   onProgress?: (step: number, maxSteps: number, message: string) => void;
   signal?: AbortSignal;
-  /** The user's /ds-effort choice for a task type (undefined = built-in default). */
+  /** The user's /route effort choice for a task type (undefined = built-in default). */
   effortFor?: (workspace: string, type: TaskType) => Effort | undefined;
 }
 
@@ -120,11 +121,17 @@ const DSML_CALLS = /<[｜|]+DSML[｜|]+tool_calls>[\s\S]*?(?:<\/[｜|]+DSML[｜|
 
 /** Notes for replies that did not end normally (finish_reason values from DeepSeek's API docs). */
 const FINISH_NOTES: Record<string, string> = {
-  length: "[Report cut off at the output limit; raise DEEPSEEK_MAX_FINAL_TOKENS or lower /ds-effort.]",
+  length: "[Report cut off at the output limit; raise DEEPSEEK_MAX_FINAL_TOKENS or lower the effort with /route.]",
   content_filter: "[DeepSeek's content filter stopped this reply.]",
   insufficient_system_resource: "[DeepSeek ran out of server capacity mid-reply. Follow up with task_id to retry.]",
   aborted: "[DeepSeek aborted this reply. Follow up with task_id to retry.]",
 };
+
+/** The final report: cut-off note added, and for findings types each quoted line checked against the file. */
+function finalReport(task: TaskRecord, r: { message: ChatMessage; finishReason: string }): string {
+  const text = withCutNote(r);
+  return VERIFY_TYPES.includes(task.type) ? checkQuotes(text, task.workspace) : text;
+}
 
 /** The reply text, flagged when it did not end normally. */
 function withCutNote(r: { message: ChatMessage; finishReason: string }): string {
@@ -153,10 +160,13 @@ async function runLoop(task: TaskRecord, deps: AgentDeps, maxSteps: number, maxT
   const missAtStart = task.usage.cacheMiss;
   const stepsAtStart = task.steps;
   // Cheap types run without thinking; planning/review/debug/research think at low effort.
-  // The user's /ds-effort choice wins over the defaults.
+  // The user's /route effort choice wins over the defaults.
   const userEffort = deps.effortFor?.(task.workspace, task.type);
   const thinking = userEffort ? (userEffort === "off" ? "disabled" : "enabled") : thinkingFor(config, task.type);
   const reasoningEffort = userEffort && userEffort !== "off" ? userEffort : reasoningEffortFor(config, task.type);
+  const stepCap = stepCapFor(config, thinking, reasoningEffort);
+  // The redo and the final report must get more room than the step that was cut off.
+  const reportCap = Math.max(config.maxFinalTokens, stepCap * 2);
   const run = { maxSteps, steps: 0, maxTokens, inputTokens: 0, rawInputTokens: 0, compactions: 0 };
   task.run = run;
   // Cached input costs about a tenth, so it counts for less against the budget.
@@ -168,6 +178,7 @@ async function runLoop(task: TaskRecord, deps: AgentDeps, maxSteps: number, maxT
     run.inputTokens = Math.round(miss + hit * config.cacheWeight);
   };
   let warned = false;
+  let shortenReasoning = config.compactReasoning;
   let compactedAt = 0; // estimated prompt tokens right after the last shortening
 
   log({ event: "start", type: task.type, model: model.id, readOnly: task.readOnly });
@@ -177,14 +188,27 @@ async function runLoop(task: TaskRecord, deps: AgentDeps, maxSteps: number, maxT
         task.status = "token_limit";
         break;
       }
-      const callModel = (cap: number) => chat(
+      const send = (cap: number) => chat(
         {
           model: model.id, messages: task.messages, tools,
           max_tokens: cap, thinking, reasoning_effort: reasoningEffort,
         },
         deps.signal,
       );
-      let r = await callModel(config.maxToolStepTokens);
+      // Shortened reasoning is accepted today but not documented. If the API refuses it,
+      // put the full reasoning back, stop shortening it for this run, and send again.
+      const callModel = async (cap: number) => {
+        try {
+          return await send(cap);
+        } catch (e) {
+          if (!(e instanceof DeepSeekError && e.status === 400 && /reasoning/i.test(e.message))) throw e;
+          if (restoreReasoning(task.messages) === 0) throw e;
+          shortenReasoning = false;
+          log({ event: "reasoning_restored", error: e.message.slice(0, 200) });
+          return send(cap);
+        }
+      };
+      let r = await callModel(stepCap);
       task.usage.add(r.usage, model);
       task.steps++;
       used();
@@ -194,8 +218,8 @@ async function runLoop(task: TaskRecord, deps: AgentDeps, maxSteps: number, maxT
       // DeepSeek can also stop a reply when it runs short of server capacity; that is worth one redo too.
       const unfinished = !r.message.tool_calls?.length || r.message.tool_calls.some((c) => !isJson(c.function.arguments));
       if (unfinished && (r.finishReason === "length" || r.finishReason === "insufficient_system_resource")) {
-        log({ event: "step_redo", reason: r.finishReason, maxTokens: config.maxToolStepTokens });
-        r = await callModel(config.maxFinalTokens);
+        log({ event: "step_redo", reason: r.finishReason, maxTokens: stepCap });
+        r = await callModel(reportCap);
         task.usage.add(r.usage, model);
         used();
       }
@@ -203,7 +227,7 @@ async function runLoop(task: TaskRecord, deps: AgentDeps, maxSteps: number, maxT
       const calls = r.message.tool_calls ?? [];
       if (calls.length === 0) {
         task.messages.push(r.message);
-        task.finalText = withCutNote(r);
+        task.finalText = finalReport(task, r);
         task.status = "done";
         log({ event: "done", steps: task.steps, cost: task.usage.cost });
         return;
@@ -218,7 +242,7 @@ async function runLoop(task: TaskRecord, deps: AgentDeps, maxSteps: number, maxT
       // The prompt is re-sent every step; once it is big, shorten old tool outputs.
       // Each shortening breaks the cache from that point, so wait until the prompt has grown again.
       if (r.usage.prompt_tokens > Math.max(config.compactTokens, compactedAt + config.compactTokens / 2)) {
-        const removed = compactHistory(task.messages);
+        const removed = compactHistory(task.messages, 8, 400, shortenReasoning);
         if (removed > 0) {
           compactedAt = r.usage.prompt_tokens - Math.round(removed / 4);
           run.compactions++;
@@ -247,14 +271,14 @@ async function runLoop(task: TaskRecord, deps: AgentDeps, maxSteps: number, maxT
     const r = await chat(
       {
         model: model.id, messages: task.messages, tools, tool_choice: "none",
-        max_tokens: config.maxFinalTokens, thinking, reasoning_effort: reasoningEffort,
+        max_tokens: reportCap, thinking, reasoning_effort: reasoningEffort,
       },
       deps.signal,
     );
     task.usage.add(r.usage, model);
     task.messages.push(r.message);
     used();
-    task.finalText = withCutNote(r);
+    task.finalText = finalReport(task, r);
     log({ event: task.status, steps: task.steps, cost: task.usage.cost });
   } catch (e) {
     task.status = "error";

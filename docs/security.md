@@ -11,7 +11,7 @@
   Commands containing shell operators (`& | ; < > $ % ^ ! ( ) { }` and backticks) never run automatically. Neither does git with `--output`. The DeepSeek, Anthropic and OpenAI API keys are removed from the environment commands run in.
 
 ## Web access
-- `web_search` and `web_fetch` (DeepSeek's Search & Fetch API) are offered only when Claude passes `web: true` (as `/ds-research` does), and only to **read-only** tasks, so text from a web page can never steer file edits or commands.
+- `web_search` and `web_fetch` (DeepSeek's Search & Fetch API) are offered only when Claude passes `web: true` (as `/ds research` does), and only to **read-only** tasks, so text from a web page can never steer file edits or commands.
 - DeepSeek is told to treat page text as untrusted data and never to put code, paths or secrets into queries or URLs. Secret files are hidden from it anyway, so it cannot read them to leak them.
 - Web access is off by default. `DEEPSEEK_WEB=on` turns it on.
 

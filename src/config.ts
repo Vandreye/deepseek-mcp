@@ -53,7 +53,7 @@ export interface Config {
   thinkingByType: Record<TaskType, Thinking>;
   /** Reasoning effort per task type, only sent when thinking is on. */
   reasoningEffortByType: Record<TaskType, string>;
-  /** max_tokens for each tool-loop step and for the final report. */
+  /** max_tokens for each tool-loop step (0 = by thinking effort, see stepCapFor) and for the final report. */
   maxToolStepTokens: number;
   maxFinalTokens: number;
   /** Step limit for task types without their own entry in maxStepsByType. */
@@ -69,6 +69,8 @@ export interface Config {
    * uncached again, so it only pays off for very long prompts. Both models have a 1M window.
    */
   compactTokens: number;
+  /** Shortening also shortens old thinking (reasoning_content). DEEPSEEK_COMPACT_REASONING=off keeps it whole. */
+  compactReasoning: boolean;
   /** Sub-tasks run at the same time when a task is split into areas. */
   fanoutConcurrency: number;
   maxReplyChars: number;
@@ -135,7 +137,7 @@ export function loadConfig(): Config {
     },
     thinkingByType: thinkingDefaults(),
     reasoningEffortByType: effortDefaults(),
-    maxToolStepTokens: num("DEEPSEEK_MAX_TOOL_STEP_TOKENS", 8_000),
+    maxToolStepTokens: num("DEEPSEEK_MAX_TOOL_STEP_TOKENS", 0),
     maxFinalTokens: num("DEEPSEEK_MAX_FINAL_TOKENS", 16_000),
     maxSteps: num("DEEPSEEK_MAX_STEPS", 25),
     maxStepsByType: {
@@ -147,6 +149,7 @@ export function loadConfig(): Config {
     maxTaskTokens: num("DEEPSEEK_MAX_TASK_TOKENS", 3_000_000),
     cacheWeight: Math.min(1, num("DEEPSEEK_CACHE_WEIGHT", 0.1)),
     compactTokens: Math.min(800_000, num("DEEPSEEK_COMPACT_TOKENS", 200_000)),
+    compactReasoning: process.env.DEEPSEEK_COMPACT_REASONING !== "off",
     fanoutConcurrency: num("DEEPSEEK_FANOUT_CONCURRENCY", 3),
     maxReplyChars: num("DEEPSEEK_MAX_REPLY_CHARS", 3200),
     commandTimeoutMs: num("DEEPSEEK_COMMAND_TIMEOUT_SEC", 300) * 1000,
@@ -172,4 +175,15 @@ export function thinkingFor(cfg: Config, type?: TaskType): Thinking {
 /** Reasoning effort for a task type; the API only gets it when thinking is on. */
 export function reasoningEffortFor(cfg: Config, type?: TaskType): string {
   return (type && cfg.reasoningEffortByType[type]) || DEFAULT_REASONING_EFFORT;
+}
+
+/**
+ * Output cap for one tool step. Thinking counts against it, and a step cut off at the cap is
+ * thrown away and redone (so paid twice). Deeper effort thinks longer, so it gets more room.
+ * A higher cap costs nothing unless it is used. DEEPSEEK_MAX_TOOL_STEP_TOKENS overrides it.
+ */
+export function stepCapFor(cfg: Config, thinking: Thinking, effort: string): number {
+  if (cfg.maxToolStepTokens) return cfg.maxToolStepTokens;
+  if (thinking !== "enabled" || effort === "low") return 8_000;
+  return effort === "max" ? 32_000 : 16_000;
 }

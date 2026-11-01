@@ -34,7 +34,7 @@ if (!fs.existsSync(routing)) {
   log(`✓ Kept existing routing table ${routing}`);
 }
 
-// 2. Slash commands (/ds, /ds-code, /route, ...) for every project.
+// 2. Slash commands (/ds, /route, /ds-approve) for every project.
 const cmdSrc = path.join(root, "claude-commands");
 const cmdDst = path.join(claudeDir, "commands");
 fs.mkdirSync(cmdDst, { recursive: true });
@@ -48,6 +48,18 @@ for (const f of fs.readdirSync(cmdSrc).filter((f) => f.endsWith(".md"))) {
   fs.writeFileSync(dst, src);
 }
 log(`✓ Installed slash commands into ${cmdDst}`);
+// Older versions installed one command per task type. Each one sits in every Claude session's
+// context, so remove ours (they call the deepseek MCP tools); leave files that aren't ours.
+const RETIRED = ["ds-code", "ds-debug", "ds-effort", "ds-fix", "ds-plan", "ds-research", "ds-review", "ds-tests"];
+const removed = [];
+for (const name of RETIRED) {
+  const f = path.join(cmdDst, `${name}.md`);
+  if (fs.existsSync(f) && /deepseek_(task|routing)/.test(fs.readFileSync(f, "utf8"))) {
+    fs.rmSync(f);
+    removed.push(`/${name}`);
+  }
+}
+if (removed.length) log(`✓ Removed old commands now covered by /ds and /route: ${removed.join(", ")}`);
 
 // 3. Permission rules: approve_actions must always ask you, even in auto-accept modes.
 const settingsFile = path.join(claudeDir, "settings.json");
