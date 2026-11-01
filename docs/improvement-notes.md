@@ -53,3 +53,58 @@ Done in the server:
 
 Not done:
 - Nothing open.
+
+## 2026-11-01: four review rounds, new features and a benchmark
+
+DeepSeek (pro) reviewed this repo four times. Claude checked each finding before fixing it, and a few were false: grep `g` flags, split-task cache misses, and Windows `\"` quoting. Commits `bd86bd5` through `35e219f`.
+
+### Fixed
+- **Cut-off reports (the biggest one).** DeepSeek writes its final report in a normal tool step, which was capped at 8k tokens, and thinking used most of that. Now a step that hits the cap with no tool calls, or with half-written tool-call arguments, is redone with the report cap (16k) and tools still on. Tool-call markup (`DSML`) that leaks into a reply is stripped. A reply still cut off gets a note.
+  - An earlier version of this fix turned tools off for the redo. DeepSeek then wrote its tool calls out as text. Don't use `tool_choice: "none"` for the redo.
+- **Other finish reasons.** `insufficient_system_resource` gets one redo. `content_filter` and `aborted` get a note.
+- **Safety.**
+  - `approve_actions` refuses to run without a confirmation prompt, unless `DEEPSEEK_ELICITATION=off`.
+  - It skips repeated ids, and re-checks that each item is still in the queue right before running it.
+  - Allowlisted tools with file-writing flags need approval: `--fix`, `--write`/`-w`, `--clean`, `-u`/`--update`, and eslint `-o`/`--output-file`.
+  - `list_dir` hides secret files.
+- **Robustness.**
+  - Unix timeouts kill the whole process group.
+  - Cancelling a task stops its running commands and approval prompts.
+  - A call that hits the 15-minute API timeout isn't retried.
+  - `Retry-After` given as a date is read correctly, and server-requested waits of up to 5 minutes are honoured.
+  - grep tests only the first 10k characters of each line, and accepts `(?i)`-style leading flags.
+  - Effort values from environment variables are validated, and `medium` is sent as `high`.
+- **Claude-side tokens.**
+  - Single-file diff, trace and summary sections are capped.
+  - Split-task reports show the usage line once.
+  - `deepseek_ask` reads only the start of each file, and notes a cut-off answer.
+- **Cost display.** Off-peak half price is applied (Chinese holidays aren't tracked, so it stays an upper bound). Thinking tokens and web calls are counted.
+
+### New
+- **Web access, off by default.**
+  - `web_search` / `web_fetch` use DeepSeek's Search & Fetch API, at $0.75 per 1,000 calls.
+  - They're offered only to read-only tasks with `web: true`, and only when `DEEPSEEK_WEB=on`.
+  - `/ds-research` asks for web access. When it's off, the report says DeepSeek used the workspace only.
+- **Strict tool schemas, off by default** (`DEEPSEEK_STRICT_TOOLS=on`, beta `/beta` API).
+  - They work on flash and pro, with and without thinking (`npm run check:live`).
+  - The benchmark showed about 20% more DeepSeek cost (more steps, longer tool calls) and no quality gain. Keep them off.
+- **Benchmark (`bench/`, see `bench/README.md`).**
+  - 11 tasks with automatic pass checks, run through the real MCP interface against any git refs or settings.
+  - A fetch probe records every DeepSeek request, so old commits can be measured too.
+  - Example: `npm run bench -- --versions "before=13c8626,now=.?DEEPSEEK_STRICT_TOOLS=off" --reps 3`.
+
+### Benchmark findings (flash, 3 repeats; results in `bench/results/`)
+- **Current defaults vs `13c8626`, on ordinary tasks:** same DeepSeek cost (+2%), same speed, Claude reads about 7% less. All of that is within run-to-run noise.
+- **Stress test, steps cut off at the cap:** pass rate 1/3 → 3/3, and cut-off reports reaching Claude 4 → 0. Recovery costs more DeepSeek spend and time.
+- **The commit-by-commit run** found nothing that raised cost except strict tool schemas.
+- **Noise is large.** One task's cost varies about 2× between runs. Use at least 3 repeats, or 8 for close calls.
+- The 11 tasks are mostly too easy to tell versions apart on quality. Only the stress task separates them.
+
+### Open
+- **Does delegating save money?** Not measured yet. The benchmark covers DeepSeek's cost and report size, not Claude's total tokens with and without delegating.
+  - Likely yes for read-heavy tasks (big reviews, debugging, test loops). Likely not for small ones, because Claude reading a small file costs about the same as reading the report.
+  - Next step: run each task two ways through `claude -p --output-format json`, once with Claude doing it and once delegated.
+- **Harder benchmark tasks**, so quality differences show up.
+- **One tool error** in a tests-money run (2026-11-01 results) hasn't been looked at.
+- **Fixed overhead** is about 1,590 tokens per Claude session (7 tools plus instructions). It could be trimmed.
+- **Benchmark coverage:** pro and higher effort levels haven't been benchmarked; everything so far ran on flash.
